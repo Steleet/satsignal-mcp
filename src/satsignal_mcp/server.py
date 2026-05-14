@@ -3,7 +3,8 @@
 Runs on stdio. Configured via env:
   SATSIGNAL_API_KEY    Bearer token (required for anchoring; unused by
                        lookup_hash / verify_bundle which are read-only).
-  SATSIGNAL_API_BASE   Default https://proof.satsignal.cloud.
+  SATSIGNAL_API_BASE   Default https://app.satsignal.cloud (customer
+                       API host — see api.DEFAULT_API_BASE).
   SATSIGNAL_MATTER     Default matter_slug ("inbox" if unset).
 
 Tools (v0.1):
