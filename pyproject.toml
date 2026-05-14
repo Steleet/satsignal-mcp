@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "satsignal-mcp"
+version = "0.1.0"
+description = "MCP server exposing Satsignal tamper-evident anchoring as agent-callable tools."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Satsignal" }]
+license = { text = "MIT" }
+keywords = ["satsignal", "mcp", "anchor", "bsv", "notary", "agent"]
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+satsignal-mcp = "satsignal_mcp.server:main"
+
+[project.urls]
+Homepage      = "https://satsignal.cloud"
+Documentation = "https://proof.satsignal.cloud"
+Source        = "https://github.com/Steleet/satsignal-mcp"
+Issues        = "https://github.com/Steleet/satsignal-mcp/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
