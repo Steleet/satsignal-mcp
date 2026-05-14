@@ -14,7 +14,7 @@ import unittest.mock as mock
 import zipfile
 from pathlib import Path
 
-from satsignal_mcp.api import AnchorResult, ApiError
+from satsignal_mcp.api import DEFAULT_API_BASE, AnchorResult, ApiError
 from satsignal_mcp.server import (
     _handle_anchor_file,
     _handle_anchor_json,
@@ -324,6 +324,16 @@ class ToolDefinitionTest(unittest.TestCase):
             props = tool.inputSchema["properties"]
             self.assertIn("dry_run", props)
             self.assertFalse(props["dry_run"]["default"])
+
+
+class DefaultApiBaseTest(unittest.TestCase):
+    """v0.1.0 shipped with DEFAULT_API_BASE=https://proof.satsignal.cloud,
+    which silently 404'd every anchor_* call (customer routes only
+    dispatch on app.* per is_app_host). Pin the correct host so a
+    future drift fails this test, not the user's first anchor."""
+
+    def test_default_points_at_app_host(self):
+        self.assertEqual(DEFAULT_API_BASE, "https://app.satsignal.cloud")
 
 
 if __name__ == "__main__":

@@ -54,8 +54,12 @@ _INSTRUCTIONS = (
 
 
 def _env_api_base() -> str:
+    # Default mirrors api.DEFAULT_API_BASE (app.satsignal.cloud, the
+    # customer API host). Earlier proof.satsignal.cloud default was a
+    # bug — see api.py for the host-role split.
+    from .api import DEFAULT_API_BASE
     return (os.environ.get("SATSIGNAL_API_BASE")
-            or "https://proof.satsignal.cloud").rstrip("/")
+            or DEFAULT_API_BASE).rstrip("/")
 
 
 def _env_api_key() -> str | None:

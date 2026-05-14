@@ -32,10 +32,15 @@ call.
 | Env var | Required | Default |
 |---|---|---|
 | `SATSIGNAL_API_KEY`  | for anchoring | — |
-| `SATSIGNAL_API_BASE` | no | `https://proof.satsignal.cloud` |
+| `SATSIGNAL_API_BASE` | no | `https://app.satsignal.cloud` |
 | `SATSIGNAL_MATTER`   | no | `inbox` |
 
-Get an API key at <https://proof.satsignal.cloud>.
+Get an API key at <https://app.satsignal.cloud>. The customer API
+(`POST /api/v1/anchors`, bundle download, dashboard) lives on
+`app.satsignal.cloud`. `proof.satsignal.cloud` is the public verifier
+surface and serves `/lookup_hash` in mirror-mode — `verify_bundle`
+works against either host, but anchoring requires `app.*`. v0.1.0
+shipped with the wrong default and silently 404'd every anchor call.
 
 ## Install
 

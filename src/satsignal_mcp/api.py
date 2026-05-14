@@ -21,8 +21,15 @@ from typing import Any, Optional
 import httpx
 
 
-DEFAULT_API_BASE = "https://proof.satsignal.cloud"
-_USER_AGENT = "satsignal-mcp/0.1.0"
+# app.satsignal.cloud is the customer API host (POST /api/v1/anchors,
+# bundle download, dashboard). proof.satsignal.cloud is the public
+# verifier surface and serves /lookup_hash mirror-mode, but customer
+# routes 404 there because the notary's host dispatcher only invokes
+# them when Host matches `_APP_HOSTS`. v0.1.0 incorrectly defaulted to
+# proof.*, which silently broke every anchor_* tool out of the box —
+# `verify_bundle` masked the bug because lookup_hash works on both.
+DEFAULT_API_BASE = "https://app.satsignal.cloud"
+_USER_AGENT = "satsignal-mcp/0.1.1"
 
 
 class ApiError(Exception):
