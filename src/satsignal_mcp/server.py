@@ -45,8 +45,10 @@ _SERVER_NAME = "satsignal"
 
 _INSTRUCTIONS = (
     "Satsignal anchors a sha256 of your input to the BSV blockchain, "
-    "returning a receipt that proves the input existed in that exact "
-    "form at a specific time. Use anchor_file / anchor_text / "
+    "returning a receipt that proves the anchorer held this exact "
+    "input by a specific time (tamper-evidence and timing — not "
+    "authorship, and not that the input existed before the anchor). "
+    "Use anchor_file / anchor_text / "
     "anchor_json to create a receipt; lookup_hash / verify_bundle to "
     "check one. Each anchor call broadcasts a real on-chain transaction "
     "and counts against the workspace's daily quota — pass dry_run=true "
