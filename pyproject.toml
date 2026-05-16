@@ -21,7 +21,7 @@ satsignal-mcp = "satsignal_mcp.server:main"
 
 [project.urls]
 Homepage      = "https://satsignal.cloud"
-Documentation = "https://proof.satsignal.cloud"
+Documentation = "https://satsignal.cloud/docs.html#mvp-integration"
 Source        = "https://github.com/Steleet/satsignal-mcp"
 Issues        = "https://github.com/Steleet/satsignal-mcp/issues"
 
