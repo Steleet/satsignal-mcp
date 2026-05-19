@@ -5,7 +5,20 @@ Runs on stdio. Configured via env:
                        lookup_hash / verify_bundle which are read-only).
   SATSIGNAL_API_BASE   Default https://app.satsignal.cloud (customer
                        API host — see api.DEFAULT_API_BASE).
-  SATSIGNAL_MATTER     Default matter_slug ("inbox" if unset).
+  SATSIGNAL_FOLDER     Default folder ("inbox" if unset).
+  SATSIGNAL_MATTER     Legacy alias of SATSIGNAL_FOLDER (still honored,
+                       byte-identical, never removed; SATSIGNAL_FOLDER
+                       takes precedence if both are set).
+
+Vocabulary note: the public input name is `folder` (env
+SATSIGNAL_FOLDER). `matter` / SATSIGNAL_MATTER are the frozen legacy
+aliases — still accepted with byte-identical behavior and never
+removed. On the wire to the Satsignal API the body key stays the
+frozen legacy `matter_slug` (accepted by every Satsignal server, incl.
+older / self-hosted); `folder` is folded into `matter_slug` before the
+network call. If both `folder` and `matter` are sent with non-empty
+values that DIFFER, the tool returns a validation error rather than
+silently picking one.
 
 Tools (v0.1):
   anchor_file          sha256 a local file, POST to /api/v1/anchors.
@@ -70,18 +83,84 @@ def _env_api_key() -> str | None:
     return v or None
 
 
-def _env_default_matter() -> str:
-    return (os.environ.get("SATSIGNAL_MATTER") or "inbox").strip() or "inbox"
+def _env_default_folder() -> str:
+    """Default folder slug.
+
+    SATSIGNAL_FOLDER is the public env var; SATSIGNAL_MATTER is the
+    frozen legacy alias. SATSIGNAL_FOLDER wins when both are set;
+    SATSIGNAL_MATTER alone still works byte-identically to the
+    pre-alias behavior.
+    """
+    val = os.environ.get("SATSIGNAL_FOLDER")
+    if val is None or not val.strip():
+        val = os.environ.get("SATSIGNAL_MATTER")
+    return (val or "inbox").strip() or "inbox"
+
+
+# Kept as the frozen legacy name so any external import still resolves.
+# Identical resolution to _env_default_folder (SATSIGNAL_FOLDER wins,
+# SATSIGNAL_MATTER fallback) — i.e. legacy SATSIGNAL_MATTER-only setups
+# are byte-identical to pre-alias behavior.
+_env_default_matter = _env_default_folder
+
+
+class FolderAliasConflict(ValueError):
+    """Both `folder` and `matter` supplied with differing non-empty
+    values. Aliases must not disagree — caller must send only one
+    (or send equal values)."""
+
+
+def _resolve_folder(args: dict) -> str:
+    """Resolve the effective folder slug from a tool's arguments.
+
+    `folder` is the public name; `matter` is the frozen legacy alias.
+    Conflict rule (mirrors the Satsignal server):
+      - both present, non-empty, and DIFFERENT  -> FolderAliasConflict
+      - both present and equal                   -> accept that value
+      - exactly one present (non-empty)          -> use it
+      - neither present                          -> env default
+        (SATSIGNAL_FOLDER, then legacy SATSIGNAL_MATTER, then 'inbox')
+
+    Precedence when reconciling: `folder` is preferred over `matter`.
+    Whitespace-only values are treated as absent (matches the prior
+    `args.get("matter") or default` behavior).
+    """
+    raw_folder = args.get("folder")
+    raw_matter = args.get("matter")
+
+    folder = raw_folder.strip() if isinstance(raw_folder, str) else ""
+    matter = raw_matter.strip() if isinstance(raw_matter, str) else ""
+
+    if folder and matter and folder != matter:
+        raise FolderAliasConflict(
+            "folder and matter are aliases and must not be sent with "
+            "different values; send only folder "
+            f"(got folder={folder!r}, matter={matter!r})."
+        )
+    # `folder` preferred; fall back to legacy `matter`; else env default.
+    chosen = folder or matter
+    return chosen or _env_default_folder()
 
 
 # ─────────────────────────── tool list ────────────────────────────────
 
 def _tool_definitions() -> list[mtypes.Tool]:
+    folder_field = {
+        "type": "string",
+        "description": (
+            "Folder slug within the workspace. Defaults to the "
+            "SATSIGNAL_FOLDER env var (legacy SATSIGNAL_MATTER still "
+            "honored) or 'inbox'. Sent to the API as the frozen "
+            "`matter_slug` wire field for backward compatibility."
+        ),
+    }
     matter_field = {
         "type": "string",
         "description": (
-            "Matter slug within the workspace. Defaults to the "
-            "SATSIGNAL_MATTER env var or 'inbox'."
+            "Legacy alias of `folder` (frozen; still accepted, never "
+            "removed). Prefer `folder`. Sending both `folder` and "
+            "`matter` with different non-empty values is an error; "
+            "equal values are accepted."
         ),
     }
     label_field = {
@@ -104,7 +183,7 @@ def _tool_definitions() -> list[mtypes.Tool]:
         "default": False,
         "description": (
             "By default the API dedups: re-anchoring the same "
-            "sha256_hex in the same matter returns the prior receipt "
+            "sha256_hex in the same folder returns the prior receipt "
             "without broadcasting. force_new=true opts out — useful "
             "for refreshing the chain timestamp."
         ),
@@ -125,6 +204,7 @@ def _tool_definitions() -> list[mtypes.Tool]:
                         "type": "string",
                         "description": "Absolute or relative path to the file.",
                     },
+                    "folder": folder_field,
                     "matter": matter_field,
                     "label": label_field,
                     "dry_run": dry_run_field,
@@ -146,6 +226,7 @@ def _tool_definitions() -> list[mtypes.Tool]:
                         "type": "string",
                         "description": "The text to anchor.",
                     },
+                    "folder": folder_field,
                     "matter": matter_field,
                     "label": label_field,
                     "dry_run": dry_run_field,
@@ -173,6 +254,7 @@ def _tool_definitions() -> list[mtypes.Tool]:
                             "non-string keys are rejected."
                         ),
                     },
+                    "folder": folder_field,
                     "matter": matter_field,
                     "label": label_field,
                     "dry_run": dry_run_field,
@@ -277,7 +359,14 @@ async def _handle_anchor_file(args: dict, api: SatsignalApi
         return _error_response(f"not a file: {path}", code="not_a_file")
 
     sha, size = _hash_file(path)
-    matter = (args.get("matter") or _env_default_matter()).strip() or "inbox"
+    try:
+        folder = _resolve_folder(args)
+    except FolderAliasConflict as e:
+        return _error_response(str(e), code="folder_matter_conflict")
+    # `folder` is the resolved slug; it is sent to the API as the
+    # frozen `matter_slug` wire field. Local name kept as `matter`
+    # so downstream payload/api call are byte-identical to before.
+    matter = folder
     label = args.get("label") or None
     dry_run = bool(args.get("dry_run", False))
     force_new = bool(args.get("force_new", False))
@@ -321,7 +410,11 @@ async def _handle_anchor_text(args: dict, api: SatsignalApi
     raw = text.encode("utf-8")
     sha = hashlib.sha256(raw).hexdigest()
     size = len(raw)
-    matter = (args.get("matter") or _env_default_matter()).strip() or "inbox"
+    try:
+        folder = _resolve_folder(args)
+    except FolderAliasConflict as e:
+        return _error_response(str(e), code="folder_matter_conflict")
+    matter = folder
     label = args.get("label") or None
     dry_run = bool(args.get("dry_run", False))
     force_new = bool(args.get("force_new", False))
@@ -366,7 +459,11 @@ async def _handle_anchor_json(args: dict, api: SatsignalApi
         return _error_response(str(e), code="canonicalization_failed")
     sha = sha256_hex(canonical)
     size = len(canonical)
-    matter = (args.get("matter") or _env_default_matter()).strip() or "inbox"
+    try:
+        folder = _resolve_folder(args)
+    except FolderAliasConflict as e:
+        return _error_response(str(e), code="folder_matter_conflict")
+    matter = folder
     label = args.get("label") or None
     dry_run = bool(args.get("dry_run", False))
     force_new = bool(args.get("force_new", False))

@@ -27,13 +27,28 @@ broadcasting. The Satsignal API itself does **not** honor `dry_run` —
 the flag lives in this MCP layer and short-circuits before any network
 call.
 
+### Folder selection
+
+Each `anchor_*` tool accepts a `folder` property naming the workspace
+folder the receipt lands in (defaults to `SATSIGNAL_FOLDER`, then the
+legacy `SATSIGNAL_MATTER`, then `inbox`).
+
+> **Legacy compat:** the old input name `matter` is a frozen alias of
+> `folder` — still accepted with byte-identical behavior and never
+> removed. Sending both `folder` and `matter` with different non-empty
+> values is rejected (`folder_matter_conflict`); equal values are
+> accepted. The request sent to the Satsignal API still uses the frozen
+> `matter_slug` wire field, so this MCP server keeps working against
+> current and older / self-hosted Satsignal servers.
+
 ## Configuration
 
 | Env var | Required | Default |
 |---|---|---|
 | `SATSIGNAL_API_KEY`  | for anchoring | — |
 | `SATSIGNAL_API_BASE` | no | `https://app.satsignal.cloud` |
-| `SATSIGNAL_MATTER`   | no | `inbox` |
+| `SATSIGNAL_FOLDER`   | no | `inbox` |
+| `SATSIGNAL_MATTER`   | no | legacy alias of `SATSIGNAL_FOLDER` (still honored; `SATSIGNAL_FOLDER` wins if both set) |
 
 Get an API key at <https://app.satsignal.cloud>. The customer API
 (`POST /api/v1/anchors`, bundle download, dashboard) lives on
@@ -59,7 +74,7 @@ Add this to `claude_desktop_config.json`:
       "command": "satsignal-mcp",
       "env": {
         "SATSIGNAL_API_KEY": "sk_...",
-        "SATSIGNAL_MATTER": "case-123"
+        "SATSIGNAL_FOLDER": "case-123"
       }
     }
   }
@@ -78,7 +93,8 @@ on-chain transaction directly against BSV, and check the sha256 matches.
 
 ## Security notes
 
-- The `label`, `filename`, and `matter_slug` fields you pass are written
+- The `label`, `filename`, and `folder` (sent on the wire as the frozen
+  `matter_slug`) fields you pass are written
   into the receipt and rendered on the public verifier page. They are
   also attacker-controllable from any agent calling this server —
   downstream code that reads these fields should treat them as untrusted
