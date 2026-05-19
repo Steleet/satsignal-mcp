@@ -36,7 +36,7 @@ legacy `SATSIGNAL_MATTER`, then `inbox`).
 > **Legacy compat:** the old input name `matter` is a frozen alias of
 > `folder` — still accepted with byte-identical behavior and never
 > removed. Sending both `folder` and `matter` with different non-empty
-> values is rejected (`folder_matter_conflict`); equal values are
+> values is rejected (`conflicting_alias`); equal values are
 > accepted. The request sent to the Satsignal API still uses the frozen
 > `matter_slug` wire field, so this MCP server keeps working against
 > current and older / self-hosted Satsignal servers.
@@ -83,8 +83,9 @@ Add this to `claude_desktop_config.json`:
 
 ## Verification model
 
-Each anchor returns a `bundle_id`, `txid`, and `receipt_url`. The proof
-is independent of Satsignal: anyone can fetch the bundle, verify the
+Each anchor returns a `proof_id`, `txid`, and `proof_url` (carrying the
+legacy `bundle_id` / `receipt_url` values, which are still present). The
+proof is independent of Satsignal: anyone can fetch the bundle, verify the
 on-chain transaction directly against BSV, and check the sha256 matches.
 `satsignal-cli` performs the full cryptographic + chain verification;
 `verify_bundle` in this MCP server does a faster chain-confirm only
