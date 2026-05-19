@@ -29,7 +29,7 @@ import httpx
 # proof.*, which silently broke every anchor_* tool out of the box —
 # `verify_bundle` masked the bug because lookup_hash works on both.
 DEFAULT_API_BASE = "https://app.satsignal.cloud"
-_USER_AGENT = "satsignal-mcp/0.2.0"
+_USER_AGENT = "satsignal-mcp/0.2.1"
 
 
 class ApiError(Exception):

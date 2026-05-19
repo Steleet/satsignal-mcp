@@ -534,7 +534,7 @@ class AnchorHandlerAliasWireTest(unittest.TestCase):
             {"path": str(self.path), "folder": "a", "matter": "b"}, api,
         ))
         payload = _parse(result)
-        self.assertEqual(payload["error"], "folder_matter_conflict")
+        self.assertEqual(payload["error"], "conflicting_alias")
         self.assertIn("send only folder", payload["message"])
         api.anchor_standard.assert_not_called()
 
@@ -548,7 +548,7 @@ class AnchorHandlerAliasWireTest(unittest.TestCase):
                 {**extra, "folder": "a", "matter": "b"}, api,
             ))
             payload = _parse(result)
-            self.assertEqual(payload["error"], "folder_matter_conflict")
+            self.assertEqual(payload["error"], "conflicting_alias")
             api.anchor_standard.assert_not_called()
 
     def test_legacy_matter_dry_run_payload_unchanged(self):

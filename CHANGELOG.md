@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1
+
+Consistency patch — no behavior change for correct callers.
+
+- The both-aliases-conflict error code is now `conflicting_alias`,
+  matching the Satsignal server and every other client surface
+  (action / cli / blob / otel / langchain). 0.2.0 emitted a
+  non-canonical `folder_matter_conflict`; only the error *code*
+  string changed, the loud-reject behavior and message are unchanged.
+- `User-Agent` aligned to `0.2.1`.
+
 ## 0.2.0
 
 Additive proof/folder vocabulary aliases — fully backward-compatible.

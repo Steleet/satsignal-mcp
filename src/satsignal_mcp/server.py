@@ -362,7 +362,7 @@ async def _handle_anchor_file(args: dict, api: SatsignalApi
     try:
         folder = _resolve_folder(args)
     except FolderAliasConflict as e:
-        return _error_response(str(e), code="folder_matter_conflict")
+        return _error_response(str(e), code="conflicting_alias")
     # `folder` is the resolved slug; it is sent to the API as the
     # frozen `matter_slug` wire field. Local name kept as `matter`
     # so downstream payload/api call are byte-identical to before.
@@ -413,7 +413,7 @@ async def _handle_anchor_text(args: dict, api: SatsignalApi
     try:
         folder = _resolve_folder(args)
     except FolderAliasConflict as e:
-        return _error_response(str(e), code="folder_matter_conflict")
+        return _error_response(str(e), code="conflicting_alias")
     matter = folder
     label = args.get("label") or None
     dry_run = bool(args.get("dry_run", False))
@@ -462,7 +462,7 @@ async def _handle_anchor_json(args: dict, api: SatsignalApi
     try:
         folder = _resolve_folder(args)
     except FolderAliasConflict as e:
-        return _error_response(str(e), code="folder_matter_conflict")
+        return _error_response(str(e), code="conflicting_alias")
     matter = folder
     label = args.get("label") or None
     dry_run = bool(args.get("dry_run", False))
