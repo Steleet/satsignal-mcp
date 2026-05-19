@@ -14,13 +14,19 @@ import unittest.mock as mock
 import zipfile
 from pathlib import Path
 
+import os
+
 from satsignal_mcp.api import DEFAULT_API_BASE, AnchorResult, ApiError
 from satsignal_mcp.server import (
+    FolderAliasConflict,
+    _env_default_folder,
+    _env_default_matter,
     _handle_anchor_file,
     _handle_anchor_json,
     _handle_anchor_text,
     _handle_lookup_hash,
     _handle_verify_bundle,
+    _resolve_folder,
     _tool_definitions,
 )
 
@@ -325,6 +331,24 @@ class ToolDefinitionTest(unittest.TestCase):
             self.assertIn("dry_run", props)
             self.assertFalse(props["dry_run"]["default"])
 
+    def test_anchor_tools_expose_folder_and_legacy_matter(self):
+        """Additive alias: every anchor tool must declare BOTH the new
+        `folder` property and the frozen legacy `matter` property, with
+        `matter` typed identically (string) so existing callers keep
+        validating."""
+        for tool in _tool_definitions():
+            if not tool.name.startswith("anchor_"):
+                continue
+            props = tool.inputSchema["properties"]
+            self.assertIn("folder", props, tool.name)
+            self.assertIn("matter", props, tool.name)
+            self.assertEqual(props["folder"]["type"], "string")
+            self.assertEqual(props["matter"]["type"], "string")
+            # Neither is required: folder/matter stay optional (env
+            # default), exactly as `matter` was pre-alias.
+            self.assertNotIn("folder", tool.inputSchema.get("required", []))
+            self.assertNotIn("matter", tool.inputSchema.get("required", []))
+
 
 class DefaultApiBaseTest(unittest.TestCase):
     """v0.1.0 shipped with DEFAULT_API_BASE=https://proof.satsignal.cloud,
@@ -334,6 +358,220 @@ class DefaultApiBaseTest(unittest.TestCase):
 
     def test_default_points_at_app_host(self):
         self.assertEqual(DEFAULT_API_BASE, "https://app.satsignal.cloud")
+
+
+class ResolveFolderTest(unittest.TestCase):
+    """Unit tests for the folder/matter alias resolver + conflict rule.
+
+    Run with no SATSIGNAL_* env so the default path is deterministic.
+    """
+
+    def setUp(self):
+        self._saved = {
+            k: os.environ.pop(k, None)
+            for k in ("SATSIGNAL_FOLDER", "SATSIGNAL_MATTER")
+        }
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    # ---- legacy `matter` property: byte-identical behavior -----------
+
+    def test_legacy_matter_only_used_as_before(self):
+        self.assertEqual(_resolve_folder({"matter": "case-legacy"}),
+                          "case-legacy")
+
+    def test_no_args_falls_back_to_inbox_default(self):
+        # Pre-alias behavior: `args.get("matter") or default` -> 'inbox'.
+        self.assertEqual(_resolve_folder({}), "inbox")
+
+    def test_whitespace_matter_treated_as_absent(self):
+        # Pre-alias: ("   ".strip() or "inbox") -> "inbox".
+        self.assertEqual(_resolve_folder({"matter": "   "}), "inbox")
+
+    def test_matter_is_stripped(self):
+        self.assertEqual(_resolve_folder({"matter": "  c1  "}), "c1")
+
+    # ---- new `folder` property ---------------------------------------
+
+    def test_folder_only(self):
+        self.assertEqual(_resolve_folder({"folder": "proj-x"}), "proj-x")
+
+    def test_folder_is_stripped(self):
+        self.assertEqual(_resolve_folder({"folder": "  proj-x "}), "proj-x")
+
+    # ---- precedence: folder preferred over matter --------------------
+
+    def test_equal_folder_and_matter_accepted(self):
+        self.assertEqual(
+            _resolve_folder({"folder": "same", "matter": "same"}), "same",
+        )
+
+    def test_folder_preferred_when_matter_empty(self):
+        self.assertEqual(
+            _resolve_folder({"folder": "f", "matter": ""}), "f",
+        )
+
+    def test_matter_used_when_folder_empty(self):
+        self.assertEqual(
+            _resolve_folder({"folder": "  ", "matter": "m"}), "m",
+        )
+
+    # ---- conflict rule ----------------------------------------------
+
+    def test_conflicting_values_raise(self):
+        with self.assertRaises(FolderAliasConflict) as ctx:
+            _resolve_folder({"folder": "a", "matter": "b"})
+        msg = str(ctx.exception)
+        self.assertIn("aliases", msg)
+        self.assertIn("send only folder", msg)
+
+
+class FolderEnvDefaultTest(unittest.TestCase):
+    """SATSIGNAL_FOLDER is the public env var; SATSIGNAL_MATTER is the
+    frozen legacy alias. Legacy SATSIGNAL_MATTER-only setups MUST stay
+    byte-identical to pre-alias behavior."""
+
+    def setUp(self):
+        self._saved = {
+            k: os.environ.pop(k, None)
+            for k in ("SATSIGNAL_FOLDER", "SATSIGNAL_MATTER")
+        }
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_default_inbox_when_unset(self):
+        self.assertEqual(_env_default_folder(), "inbox")
+
+    def test_legacy_satsignal_matter_still_honored(self):
+        os.environ["SATSIGNAL_MATTER"] = "legacy-env"
+        self.assertEqual(_env_default_folder(), "legacy-env")
+        # The frozen public name is still importable and identical.
+        self.assertIs(_env_default_matter, _env_default_folder)
+        self.assertEqual(_env_default_matter(), "legacy-env")
+
+    def test_satsignal_folder_used(self):
+        os.environ["SATSIGNAL_FOLDER"] = "new-env"
+        self.assertEqual(_env_default_folder(), "new-env")
+
+    def test_satsignal_folder_wins_over_legacy_matter(self):
+        os.environ["SATSIGNAL_FOLDER"] = "new-env"
+        os.environ["SATSIGNAL_MATTER"] = "legacy-env"
+        self.assertEqual(_env_default_folder(), "new-env")
+
+    def test_blank_satsignal_folder_falls_back_to_legacy(self):
+        os.environ["SATSIGNAL_FOLDER"] = "   "
+        os.environ["SATSIGNAL_MATTER"] = "legacy-env"
+        self.assertEqual(_env_default_folder(), "legacy-env")
+
+
+class AnchorHandlerAliasWireTest(unittest.TestCase):
+    """End-to-end through the anchor handlers: confirm the resolved
+    folder is sent to the API as the FROZEN `matter_slug` wire kwarg
+    (never `folder_slug`), legacy `matter` still works, and conflicts
+    short-circuit before any network call."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "doc.txt"
+        self.path.write_bytes(b"hello world")
+        self.sha = hashlib.sha256(b"hello world").hexdigest()
+        self._saved = {
+            k: os.environ.pop(k, None)
+            for k in ("SATSIGNAL_FOLDER", "SATSIGNAL_MATTER")
+        }
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is not None:
+                os.environ[k] = v
+        self.tmp.cleanup()
+
+    def _api(self):
+        api = mock.AsyncMock()
+        api.anchor_standard.return_value = _stub_anchor_result(sha=self.sha)
+        return api
+
+    def test_legacy_matter_arg_sends_matter_slug_unchanged(self):
+        api = self._api()
+        _run(_handle_anchor_file(
+            {"path": str(self.path), "matter": "case-legacy"}, api,
+        ))
+        kwargs = api.anchor_standard.call_args.kwargs
+        self.assertEqual(kwargs["matter_slug"], "case-legacy")
+        self.assertNotIn("folder_slug", kwargs)
+        self.assertNotIn("folder", kwargs)
+
+    def test_new_folder_arg_folds_into_matter_slug_wire_field(self):
+        api = self._api()
+        _run(_handle_anchor_text(
+            {"text": "hi", "folder": "proj-x"}, api,
+        ))
+        kwargs = api.anchor_standard.call_args.kwargs
+        self.assertEqual(kwargs["matter_slug"], "proj-x")
+        self.assertNotIn("folder_slug", kwargs)
+
+    def test_folder_preferred_over_matter_on_wire(self):
+        api = self._api()
+        _run(_handle_anchor_json(
+            {"data": {"k": 1}, "folder": "f", "matter": ""}, api,
+        ))
+        kwargs = api.anchor_standard.call_args.kwargs
+        self.assertEqual(kwargs["matter_slug"], "f")
+
+    def test_conflict_returns_error_and_no_api_call(self):
+        api = self._api()
+        result = _run(_handle_anchor_file(
+            {"path": str(self.path), "folder": "a", "matter": "b"}, api,
+        ))
+        payload = _parse(result)
+        self.assertEqual(payload["error"], "folder_matter_conflict")
+        self.assertIn("send only folder", payload["message"])
+        api.anchor_standard.assert_not_called()
+
+    def test_conflict_on_text_and_json_too(self):
+        for handler, extra in (
+            (_handle_anchor_text, {"text": "x"}),
+            (_handle_anchor_json, {"data": {"a": 1}}),
+        ):
+            api = self._api()
+            result = _run(handler(
+                {**extra, "folder": "a", "matter": "b"}, api,
+            ))
+            payload = _parse(result)
+            self.assertEqual(payload["error"], "folder_matter_conflict")
+            api.anchor_standard.assert_not_called()
+
+    def test_legacy_matter_dry_run_payload_unchanged(self):
+        """Regression guard: dry-run still reports `matter_slug` and the
+        legacy `matter` arg drives it byte-identically."""
+        api = mock.AsyncMock()
+        result = _run(_handle_anchor_file(
+            {"path": str(self.path), "matter": "case42", "dry_run": True},
+            api,
+        ))
+        payload = _parse(result)
+        self.assertEqual(payload["matter_slug"], "case42")
+        api.anchor_standard.assert_not_called()
+
+    def test_folder_drives_dry_run_matter_slug(self):
+        api = mock.AsyncMock()
+        result = _run(_handle_anchor_file(
+            {"path": str(self.path), "folder": "case42", "dry_run": True},
+            api,
+        ))
+        payload = _parse(result)
+        self.assertEqual(payload["matter_slug"], "case42")
+        api.anchor_standard.assert_not_called()
 
 
 if __name__ == "__main__":
