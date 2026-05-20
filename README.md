@@ -16,11 +16,13 @@ and returns a receipt the agent can save or pass on.
 
 | Tool | Auth | What it does |
 |---|---|---|
-| `anchor_file`     | yes | sha256 a local file, anchor the digest |
-| `anchor_text`     | yes | sha256 a UTF-8 string, anchor the digest |
-| `anchor_json`     | yes | canonicalize JSON (sorted keys, compact, UTF-8), sha256, anchor |
-| `lookup_hash`     | no  | check if a sha256 is on-chain |
-| `verify_bundle`   | no  | open a local `.mbnt` and chain-confirm via `lookup_hash` |
+| `anchor_file`                | yes | sha256 a local file, anchor the digest |
+| `anchor_text`                | yes | sha256 a UTF-8 string, anchor the digest |
+| `anchor_json`                | yes | canonicalize JSON (sorted keys, compact, UTF-8), sha256, anchor |
+| `lookup_hash`                | no  | check if a sha256 is on-chain |
+| `verify_file_against_bundle` | no  | **full verify** — re-hash the original file, confirm it matches the bundle, chain-confirm via public block explorers. Detects file tampering. |
+| `chain_confirm_bundle`       | no  | chain-confirm only — open a local `.mbnt`, extract sha+txid, confirm via `lookup_hash`. Fast, but does NOT detect file tampering. |
+| `verify_bundle`              | no  | _deprecated_ alias of `chain_confirm_bundle`; removable in 0.5 |
 
 `anchor_*` tools accept `dry_run: true` to preview the sha256 without
 broadcasting. The Satsignal API itself does **not** honor `dry_run` —
@@ -53,7 +55,7 @@ legacy `SATSIGNAL_MATTER`, then `inbox`).
 Get an API key at <https://app.satsignal.cloud>. The customer API
 (`POST /api/v1/anchors`, bundle download, dashboard) lives on
 `app.satsignal.cloud`. `proof.satsignal.cloud` is the public verifier
-surface and serves `/lookup_hash` in mirror-mode — `verify_bundle`
+surface and serves `/lookup_hash` in mirror-mode — `chain_confirm_bundle`
 works against either host, but anchoring requires `app.*`. v0.1.0
 shipped with the wrong default and silently 404'd every anchor call.
 
@@ -85,12 +87,29 @@ Add this to `claude_desktop_config.json`:
 
 Each anchor returns a `proof_id`, `txid`, and `proof_url` (carrying the
 legacy `bundle_id` / `receipt_url` values, which are still present). The
-proof is independent of Satsignal: anyone can fetch the bundle, verify the
-on-chain transaction directly against BSV, and check the sha256 matches.
-`satsignal-cli` performs the full cryptographic + chain verification;
-`verify_bundle` in this MCP server does a faster chain-confirm only
-(matches the bundle's claimed `txid` against what the public
-`/lookup_hash` index reports for that sha).
+proof is independent of Satsignal: anyone can fetch the bundle, verify
+the on-chain transaction directly against BSV, and check the sha256
+matches.
+
+This server exposes two verify tools with different trust assumptions —
+pick the one that matches what you have on hand:
+
+- **`verify_file_against_bundle(file_path, bundle_path)`** — full
+  verify. Re-hashes the original file, confirms it matches the bundle's
+  claimed sha (crypto check, detects tampering), then chain-confirms via
+  public block explorers (WoC + Bitails) that the on-chain `doc_hash`
+  matches the bundle. This is the recommended path when you have the
+  original file. Backed by `satsignal-cli`'s `verify_file` (pinned as a
+  runtime dep so a clean install gets full verify out of the box).
+- **`chain_confirm_bundle(bundle_path)`** — fast chain-confirm only.
+  Opens the bundle, extracts its claimed `sha + txid`, and confirms
+  via Satsignal's `/lookup_hash` index that the sha was anchored at
+  that txid. Does NOT open the original file, so a **tampered original
+  is not detected** — the bundle stays self-consistent. Use this when
+  the original file isn't available, or as a cheap pre-check.
+
+`verify_bundle` is kept as a deprecated alias of `chain_confirm_bundle`
+for 0.3.x → 0.4.x; removable in 0.5.
 
 ## Security notes
 

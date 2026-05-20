@@ -2,7 +2,8 @@
 
 Runs on stdio. Configured via env:
   SATSIGNAL_API_KEY    Bearer token (required for anchoring; unused by
-                       lookup_hash / verify_bundle which are read-only).
+                       lookup_hash / chain_confirm_bundle /
+                       verify_file_against_bundle which are read-only).
   SATSIGNAL_API_BASE   Default https://app.satsignal.cloud (customer
                        API host — see api.DEFAULT_API_BASE).
   SATSIGNAL_FOLDER     Default folder ("inbox" if unset).
@@ -20,13 +21,21 @@ network call. If both `folder` and `matter` are sent with non-empty
 values that DIFFER, the tool returns a validation error rather than
 silently picking one.
 
-Tools (v0.1):
-  anchor_file          sha256 a local file, POST to /api/v1/anchors.
-  anchor_text          sha256 a UTF-8 string.
-  anchor_json          Canonicalize JSON (sort_keys), sha256, anchor.
-  lookup_hash          Read-only check whether a sha is on-chain.
-  verify_bundle        Open a local .mbnt, extract sha + txid, chain-
-                       confirm via lookup_hash.
+Tools (v0.3):
+  anchor_file                  sha256 a local file, POST to /api/v1/anchors.
+  anchor_text                  sha256 a UTF-8 string.
+  anchor_json                  Canonicalize JSON (sort_keys), sha256, anchor.
+  lookup_hash                  Read-only check whether a sha is on-chain.
+  chain_confirm_bundle         Open a local .mbnt, extract sha + txid,
+                               chain-confirm via lookup_hash. Fast, but
+                               does NOT detect file tampering — the
+                               original file is never opened.
+  verify_file_against_bundle   Full verify: re-hash the original file,
+                               compare to the bundle's claimed sha,
+                               and chain-confirm via public block
+                               explorers. Detects tampering.
+  verify_bundle                Deprecated alias of chain_confirm_bundle
+                               (still works; will be removed in 0.5).
 
 Dry-run policy: every anchor tool accepts `dry_run: bool = false`. When
 true the tool computes the sha + canonical bytes and returns a preview
@@ -61,10 +70,13 @@ _INSTRUCTIONS = (
     "returning a receipt that proves the anchorer held this exact "
     "input by a specific time (tamper-evidence and timing — not "
     "authorship, and not that the input existed before the anchor). "
-    "Use anchor_file / anchor_text / "
-    "anchor_json to create a receipt; lookup_hash / verify_bundle to "
-    "check one. Each anchor call broadcasts a real on-chain transaction "
-    "and counts against the workspace's daily quota — pass dry_run=true "
+    "Use anchor_file / anchor_text / anchor_json to create a receipt. "
+    "To check a receipt, use verify_file_against_bundle when you have "
+    "the original file in hand (full verify: detects tampering) — or "
+    "chain_confirm_bundle for a fast chain-only check when the file "
+    "isn't available. lookup_hash is a raw sha → txid index lookup. "
+    "Each anchor call broadcasts a real on-chain transaction and "
+    "counts against the workspace's daily quota — pass dry_run=true "
     "first if you want to preview the sha256 before committing."
 )
 
@@ -281,14 +293,93 @@ def _tool_definitions() -> list[mtypes.Tool]:
             },
         ),
         mtypes.Tool(
+            name="chain_confirm_bundle",
+            description=(
+                "CHAIN-CONFIRM ONLY: open a local .mbnt bundle, extract "
+                "its claimed sha + txid, and confirm via /lookup_hash "
+                "that the sha was anchored at that txid. Does NOT open "
+                "the original file, so a tampered original is NOT "
+                "detected — the bundle stays self-consistent. For full "
+                "verify (including tamper detection), use "
+                "verify_file_against_bundle. Pass `bundle_path` (the "
+                "new canonical name) OR `path` (the legacy alias from "
+                "verify_bundle); the handler accepts either."
+            ),
+            # Note: bundle_path is NOT in `required` so we can honor the
+            # legacy `path` arg too. The handler enforces "exactly one
+            # non-empty path argument" and returns conflicting_alias if
+            # both are sent with differing values, or missing_bundle_path
+            # if neither is sent.
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "bundle_path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the .mbnt bundle (NOT the original "
+                            "file). Preferred over the legacy `path`."
+                        ),
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Legacy alias of bundle_path (from "
+                            "verify_bundle in 0.2.x); still accepted."
+                        ),
+                    },
+                },
+            },
+        ),
+        mtypes.Tool(
+            name="verify_file_against_bundle",
+            description=(
+                "FULL VERIFY: re-hash the original file, confirm it "
+                "matches the bundle's claimed sha (crypto check, "
+                "detects tampering), then chain-confirm via public "
+                "block explorers (WoC + Bitails) that the on-chain "
+                "doc_hash matches what the bundle says. Returns "
+                "verified=true only when both checks pass. Use this "
+                "when you have the original file in hand; "
+                "chain_confirm_bundle is faster but can't detect a "
+                "swapped original."
+            ),
+            inputSchema={
+                "type": "object",
+                "required": ["file_path", "bundle_path"],
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the original file the bundle "
+                            "claims to anchor. Will be sha256'd and "
+                            "compared to the bundle's claimed hash."
+                        ),
+                    },
+                    "bundle_path": {
+                        "type": "string",
+                        "description": "Path to the .mbnt bundle.",
+                    },
+                    "min_confirmations": {
+                        "type": "integer",
+                        "description": (
+                            "Minimum block confirmations required to "
+                            "return verified=true. Default 0 (any "
+                            "inclusion counts; 0-conf means broadcast "
+                            "but not yet mined)."
+                        ),
+                        "minimum": 0,
+                    },
+                },
+            },
+        ),
+        mtypes.Tool(
             name="verify_bundle",
             description=(
-                "Open a local .mbnt receipt bundle, extract its "
-                "sha256_hex + txid, and chain-confirm via /lookup_hash. "
-                "Returns verified=true only when the bundle's claimed "
-                "txid matches what the index reports for that sha. "
-                "This is a fast chain-confirm only; full cryptographic "
-                "validation is in satsignal-cli."
+                "DEPRECATED — alias of chain_confirm_bundle (chain "
+                "only, does NOT detect file tampering). Still works "
+                "byte-identically; will be removed in 0.5. Switch to "
+                "chain_confirm_bundle (same semantics) or "
+                "verify_file_against_bundle (full verify, recommended)."
             ),
             inputSchema={
                 "type": "object",
@@ -546,11 +637,28 @@ def _extract_bundle_claims(bundle_path: Path) -> tuple[dict, dict]:
     return manifest, canonical
 
 
-async def _handle_verify_bundle(args: dict, api: SatsignalApi
-                                ) -> list[mtypes.TextContent]:
-    raw_path = args.get("path") or ""
-    if not isinstance(raw_path, str) or not raw_path:
-        return _error_response("path is required", code="missing_path")
+async def _handle_chain_confirm_bundle(args: dict, api: SatsignalApi
+                                       ) -> list[mtypes.TextContent]:
+    # Accept both `bundle_path` (new canonical name) and `path` (legacy
+    # alias, still emitted by the deprecated verify_bundle tool). If
+    # both are sent with different non-empty values, that's a caller
+    # bug — refuse rather than silently picking one (matches the
+    # folder/matter alias-conflict policy in _resolve_folder).
+    raw_bundle = args.get("bundle_path")
+    raw_path = args.get("path")
+    bundle = raw_bundle.strip() if isinstance(raw_bundle, str) else ""
+    legacy = raw_path.strip() if isinstance(raw_path, str) else ""
+    if bundle and legacy and bundle != legacy:
+        return _error_response(
+            "bundle_path and path are aliases and must not be sent "
+            "with different values; send only bundle_path.",
+            code="conflicting_alias",
+        )
+    raw_path = bundle or legacy
+    if not raw_path:
+        return _error_response(
+            "bundle_path is required", code="missing_bundle_path",
+        )
     path = Path(raw_path).expanduser()
     if not path.is_file():
         return _error_response(f"not a file: {path}", code="not_a_file")
@@ -612,12 +720,88 @@ async def _handle_verify_bundle(args: dict, api: SatsignalApi
     })
 
 
+# satsignal-cli's verify_file is the canonical full-verify entry point
+# (crypto + doc_hash + public-explorer chain confirm in one call). Pinned
+# as a runtime dependency so MCP installs get the whole verify story in
+# one pip install. Import at module scope so a missing dep fails fast at
+# startup, not on first tool invocation.
+from satsignal.verify import VerifyClass, verify_file  # noqa: E402
+
+
+# Pass-through map. PENDING is crypto+chain OK with 0 confirmations
+# (broadcast but not yet mined) — still verified=true; the confirmations
+# field surfaces the maturity. OFFLINE never appears because we never
+# pass offline=True (would skip the chain check, violating the helper's
+# chain-confirm-by-default contract).
+_VERIFIED_CLASSES = frozenset({VerifyClass.VERIFIED, VerifyClass.PENDING})
+
+
+async def _handle_verify_file_against_bundle(
+    args: dict, api: SatsignalApi,  # api unused — kept for dispatch parity
+) -> list[mtypes.TextContent]:
+    raw_file = args.get("file_path")
+    raw_bundle = args.get("bundle_path")
+    if not isinstance(raw_file, str) or not raw_file.strip():
+        return _error_response(
+            "file_path is required (the original file to re-hash)",
+            code="missing_file_path",
+        )
+    if not isinstance(raw_bundle, str) or not raw_bundle.strip():
+        return _error_response(
+            "bundle_path is required (the .mbnt receipt bundle)",
+            code="missing_bundle_path",
+        )
+    file_p = Path(raw_file).expanduser()
+    bundle_p = Path(raw_bundle).expanduser()
+    if not file_p.is_file():
+        return _error_response(f"not a file: {file_p}", code="not_a_file",
+                               which="file_path")
+    if not bundle_p.is_file():
+        return _error_response(f"not a file: {bundle_p}", code="not_a_file",
+                               which="bundle_path")
+
+    raw_min_conf = args.get("min_confirmations", 0)
+    if not isinstance(raw_min_conf, int) or raw_min_conf < 0:
+        return _error_response(
+            "min_confirmations must be a non-negative integer",
+            code="bad_min_confirmations",
+        )
+
+    # verify_file does its own bundle-format validation, so we don't
+    # pre-check is_zipfile — let it bubble through as VerifyClass.CRYPTO
+    # with a descriptive message.
+    result = await asyncio.to_thread(
+        verify_file, file_p, bundle_p,
+        offline=False, min_confirmations=raw_min_conf,
+    )
+
+    verified = result.cls in _VERIFIED_CLASSES
+    payload: dict[str, Any] = {
+        "verified": verified,
+        "verify_class": result.cls.value,
+    }
+    if result.sha256_hex:
+        payload["file_sha256_hex"] = result.sha256_hex
+    if result.txid:
+        payload["txid"] = result.txid
+    if result.confirmations is not None:
+        payload["confirmations"] = result.confirmations
+    if result.message:
+        payload["reason"] = result.message
+    return _text_response(payload)
+
+
 _HANDLERS = {
     "anchor_file": _handle_anchor_file,
     "anchor_text": _handle_anchor_text,
     "anchor_json": _handle_anchor_json,
     "lookup_hash": _handle_lookup_hash,
-    "verify_bundle": _handle_verify_bundle,
+    # chain_confirm_bundle is the canonical name; verify_bundle is the
+    # frozen legacy alias (deprecated 0.3, removable 0.5). Same handler;
+    # the handler accepts either `bundle_path` or `path` in args.
+    "chain_confirm_bundle": _handle_chain_confirm_bundle,
+    "verify_bundle": _handle_chain_confirm_bundle,
+    "verify_file_against_bundle": _handle_verify_file_against_bundle,
 }
 
 
