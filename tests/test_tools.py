@@ -24,11 +24,16 @@ from satsignal_mcp.server import (
     _handle_anchor_file,
     _handle_anchor_json,
     _handle_anchor_text,
+    _handle_chain_confirm_bundle,
     _handle_lookup_hash,
-    _handle_verify_bundle,
+    _handle_verify_file_against_bundle,
     _resolve_folder,
     _tool_definitions,
 )
+
+# v0.3 rename: verify_bundle handler is now _handle_chain_confirm_bundle.
+# Existing tests continue to call the same code path via this alias.
+_handle_verify_bundle = _handle_chain_confirm_bundle
 
 
 def _run(coro):
@@ -315,12 +320,18 @@ class VerifyBundleTest(unittest.TestCase):
 
 class ToolDefinitionTest(unittest.TestCase):
 
-    def test_five_tools_declared(self):
+    def test_seven_tools_declared(self):
+        # v0.3 split: chain_confirm_bundle is the new canonical name,
+        # verify_file_against_bundle is the new full-verify tool, and
+        # verify_bundle remains as a deprecated alias.
         tools = _tool_definitions()
         self.assertEqual(
             [t.name for t in tools],
             ["anchor_file", "anchor_text", "anchor_json",
-             "lookup_hash", "verify_bundle"],
+             "lookup_hash",
+             "chain_confirm_bundle",
+             "verify_file_against_bundle",
+             "verify_bundle"],
         )
 
     def test_anchor_tools_have_dry_run_with_default_false(self):
@@ -572,6 +583,247 @@ class AnchorHandlerAliasWireTest(unittest.TestCase):
         payload = _parse(result)
         self.assertEqual(payload["matter_slug"], "case42")
         api.anchor_standard.assert_not_called()
+
+
+class ChainConfirmBundleAliasTest(unittest.TestCase):
+    """v0.3: chain_confirm_bundle is the canonical name; verify_bundle
+    keeps working byte-identically as a deprecated alias. The handler
+    also accepts the new `bundle_path` arg and the legacy `path` alias,
+    refusing on differing non-empty values."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "test.mbnt"
+        with zipfile.ZipFile(self.bundle, "w") as zf:
+            zf.writestr("manifest.json", json.dumps({"txid": "t" * 64}))
+            zf.writestr(
+                "canonical.json",
+                json.dumps({"subject": {"document_sha256": "a" * 64}}),
+            )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _api(self):
+        api = mock.AsyncMock()
+        api.lookup_hash.return_value = {
+            "bundle_id": "b1", "txid": "t" * 64, "created_utc": "x",
+        }
+        return api
+
+    def test_bundle_path_arg_works(self):
+        result = _run(_handle_chain_confirm_bundle(
+            {"bundle_path": str(self.bundle)}, self._api(),
+        ))
+        self.assertTrue(_parse(result)["verified"])
+
+    def test_legacy_path_arg_still_works(self):
+        result = _run(_handle_chain_confirm_bundle(
+            {"path": str(self.bundle)}, self._api(),
+        ))
+        self.assertTrue(_parse(result)["verified"])
+
+    def test_both_args_same_value_accepted(self):
+        result = _run(_handle_chain_confirm_bundle(
+            {"bundle_path": str(self.bundle), "path": str(self.bundle)},
+            self._api(),
+        ))
+        self.assertTrue(_parse(result)["verified"])
+
+    def test_conflicting_alias_rejected(self):
+        api = self._api()
+        result = _run(_handle_chain_confirm_bundle(
+            {"bundle_path": str(self.bundle), "path": "/some/other.mbnt"},
+            api,
+        ))
+        payload = _parse(result)
+        self.assertEqual(payload["error"], "conflicting_alias")
+        api.lookup_hash.assert_not_called()
+
+    def test_neither_arg_rejected(self):
+        api = self._api()
+        result = _run(_handle_chain_confirm_bundle({}, api))
+        payload = _parse(result)
+        self.assertEqual(payload["error"], "missing_bundle_path")
+        api.lookup_hash.assert_not_called()
+
+    def test_verify_bundle_dispatches_same_handler(self):
+        """Dispatch parity: the deprecated verify_bundle name routes
+        to the same handler so its behavior is byte-identical."""
+        from satsignal_mcp.server import _HANDLERS
+        self.assertIs(_HANDLERS["verify_bundle"],
+                      _HANDLERS["chain_confirm_bundle"])
+
+
+class VerifyFileAgainstBundleTest(unittest.TestCase):
+    """v0.3 new tool: re-hashes the original file, runs crypto + chain
+    via satsignal-cli's verify_file. Tests mock that function so we
+    don't hit the network."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.file = Path(self.tmp.name) / "doc.txt"
+        self.file.write_text("hello")
+        self.bundle = Path(self.tmp.name) / "doc.mbnt"
+        with zipfile.ZipFile(self.bundle, "w") as zf:
+            zf.writestr("manifest.json", json.dumps({"txid": "t" * 64}))
+            zf.writestr(
+                "canonical.json",
+                json.dumps({"subject": {"document_sha256": "a" * 64}}),
+            )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _mock_result(self, cls, **kw):
+        from satsignal.verify import VerifyClass
+        r = mock.Mock()
+        r.cls = cls if isinstance(cls, VerifyClass) else VerifyClass(cls)
+        r.sha256_hex = kw.get("sha256_hex")
+        r.txid = kw.get("txid")
+        r.confirmations = kw.get("confirmations")
+        r.message = kw.get("message")
+        return r
+
+    def test_verified_true_on_verified_class(self):
+        from satsignal.verify import VerifyClass
+        with mock.patch("satsignal_mcp.server.verify_file") as vf:
+            vf.return_value = self._mock_result(
+                VerifyClass.VERIFIED,
+                sha256_hex="a" * 64, txid="t" * 64, confirmations=3,
+            )
+            result = _run(_handle_verify_file_against_bundle(
+                {"file_path": str(self.file),
+                 "bundle_path": str(self.bundle)},
+                mock.AsyncMock(),
+            ))
+        payload = _parse(result)
+        self.assertTrue(payload["verified"])
+        self.assertEqual(payload["verify_class"], "verified")
+        self.assertEqual(payload["confirmations"], 3)
+
+    def test_verified_true_on_pending_class(self):
+        """Crypto + chain both passed, just 0 confirmations — still
+        verified=true; confirmations field surfaces maturity."""
+        from satsignal.verify import VerifyClass
+        with mock.patch("satsignal_mcp.server.verify_file") as vf:
+            vf.return_value = self._mock_result(
+                VerifyClass.PENDING,
+                sha256_hex="a" * 64, txid="t" * 64, confirmations=0,
+            )
+            result = _run(_handle_verify_file_against_bundle(
+                {"file_path": str(self.file),
+                 "bundle_path": str(self.bundle)},
+                mock.AsyncMock(),
+            ))
+        payload = _parse(result)
+        self.assertTrue(payload["verified"])
+        self.assertEqual(payload["confirmations"], 0)
+
+    def test_verified_false_on_crypto_mismatch(self):
+        """Tampered file: this is the whole reason this tool exists."""
+        from satsignal.verify import VerifyClass
+        with mock.patch("satsignal_mcp.server.verify_file") as vf:
+            vf.return_value = self._mock_result(
+                VerifyClass.CRYPTO,
+                message="sha256 mismatch: bundle expects "
+                        "a..., got b...",
+            )
+            result = _run(_handle_verify_file_against_bundle(
+                {"file_path": str(self.file),
+                 "bundle_path": str(self.bundle)},
+                mock.AsyncMock(),
+            ))
+        payload = _parse(result)
+        self.assertFalse(payload["verified"])
+        self.assertEqual(payload["verify_class"], "crypto")
+        self.assertIn("mismatch", payload["reason"])
+
+    def test_verified_false_on_chain_mismatch(self):
+        from satsignal.verify import VerifyClass
+        with mock.patch("satsignal_mcp.server.verify_file") as vf:
+            vf.return_value = self._mock_result(
+                VerifyClass.CHAIN,
+                message="on-chain doc_hash X does not match bundle's Y",
+            )
+            result = _run(_handle_verify_file_against_bundle(
+                {"file_path": str(self.file),
+                 "bundle_path": str(self.bundle)},
+                mock.AsyncMock(),
+            ))
+        payload = _parse(result)
+        self.assertFalse(payload["verified"])
+        self.assertEqual(payload["verify_class"], "chain")
+
+    def test_missing_file_path_rejected(self):
+        result = _run(_handle_verify_file_against_bundle(
+            {"bundle_path": str(self.bundle)}, mock.AsyncMock(),
+        ))
+        self.assertEqual(_parse(result)["error"], "missing_file_path")
+
+    def test_missing_bundle_path_rejected(self):
+        result = _run(_handle_verify_file_against_bundle(
+            {"file_path": str(self.file)}, mock.AsyncMock(),
+        ))
+        self.assertEqual(_parse(result)["error"], "missing_bundle_path")
+
+    def test_nonexistent_file_rejected_with_which_field(self):
+        result = _run(_handle_verify_file_against_bundle(
+            {"file_path": "/no/such/file",
+             "bundle_path": str(self.bundle)},
+            mock.AsyncMock(),
+        ))
+        payload = _parse(result)
+        self.assertEqual(payload["error"], "not_a_file")
+        self.assertEqual(payload["which"], "file_path")
+
+    def test_nonexistent_bundle_rejected_with_which_field(self):
+        result = _run(_handle_verify_file_against_bundle(
+            {"file_path": str(self.file),
+             "bundle_path": "/no/such/bundle.mbnt"},
+            mock.AsyncMock(),
+        ))
+        payload = _parse(result)
+        self.assertEqual(payload["error"], "not_a_file")
+        self.assertEqual(payload["which"], "bundle_path")
+
+    def test_min_confirmations_passed_through(self):
+        from satsignal.verify import VerifyClass
+        with mock.patch("satsignal_mcp.server.verify_file") as vf:
+            vf.return_value = self._mock_result(
+                VerifyClass.VERIFIED,
+                sha256_hex="a" * 64, txid="t" * 64, confirmations=7,
+            )
+            _run(_handle_verify_file_against_bundle(
+                {"file_path": str(self.file),
+                 "bundle_path": str(self.bundle),
+                 "min_confirmations": 6},
+                mock.AsyncMock(),
+            ))
+            _, kwargs = vf.call_args
+            self.assertEqual(kwargs["min_confirmations"], 6)
+
+    def test_offline_never_passed_through(self):
+        """[[feedback_chain_confirm_in_helpers]]: chain-confirm MUST be
+        on by default in helpers. We never let the caller skip the
+        chain check, so verify_file is always called with offline=False."""
+        from satsignal.verify import VerifyClass
+        with mock.patch("satsignal_mcp.server.verify_file") as vf:
+            vf.return_value = self._mock_result(
+                VerifyClass.VERIFIED,
+                sha256_hex="a" * 64, txid="t" * 64, confirmations=1,
+            )
+            _run(_handle_verify_file_against_bundle(
+                {"file_path": str(self.file),
+                 "bundle_path": str(self.bundle),
+                 # User-supplied offline=True is silently ignored — the
+                 # tool's schema doesn't list it, so an LLM agent can't
+                 # request a less-safe verify.
+                 "offline": True},
+                mock.AsyncMock(),
+            ))
+            _, kwargs = vf.call_args
+            self.assertFalse(kwargs["offline"])
 
 
 if __name__ == "__main__":

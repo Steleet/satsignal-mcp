@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.3.0
+
+Verify split — additive new tool + safer naming. Fully
+backward-compatible; `verify_bundle` keeps working byte-identically.
+
+A fresh cold-start review (2026-05-20) flagged that `verify_bundle`
+sounded like full verify but only did chain-confirm — it never opened
+the original file, so a tampered original passed `verified=true`. The
+description was honest about this at the tail; the name was not. v0.3
+splits the two responsibilities into distinct, accurately-named tools.
+
+- New tool **`verify_file_against_bundle(file_path, bundle_path)`** —
+  the safe default for "is this file really what the bundle claims?".
+  Re-hashes the original file, compares to the bundle's claimed sha
+  (crypto check, detects tampering), then chain-confirms via public
+  block explorers (WoC + Bitails) that the on-chain `doc_hash` matches.
+  Backed by `satsignal-cli`'s `verify_file` — pinned as a runtime dep
+  (`satsignal-cli>=0.4`) so a clean install gets the full verify story
+  out of the box.
+- New tool name **`chain_confirm_bundle(bundle_path)`** for the
+  chain-only behavior previously called `verify_bundle`. Tool
+  description now leads with "CHAIN-CONFIRM ONLY: ... does NOT detect
+  file tampering". Accepts `bundle_path` (new canonical name) or the
+  legacy `path` alias; sending both with different non-empty values is
+  rejected (`conflicting_alias`).
+- **`verify_bundle` is now a deprecated alias of `chain_confirm_bundle`** —
+  same handler, byte-identical behavior, no schema changes for callers
+  pinned to it. Removable in 0.5; tool description marks it DEPRECATED
+  so listings make the deprecation visible.
+- `_INSTRUCTIONS` (the per-server hint injected into agent context)
+  now points agents at `verify_file_against_bundle` first when they
+  have the file in hand.
+- Runtime dep added: `satsignal-cli>=0.4`. Its only own dep is
+  `requests`; SPV/p2p modules are dormant unless explicitly invoked
+  via the standalone CLI.
+
 ## 0.2.1
 
 Consistency patch — no behavior change for correct callers.
