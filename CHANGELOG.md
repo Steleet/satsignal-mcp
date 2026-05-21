@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.1
+
+Maintenance release — no user-visible behavior change. Tool surface
+byte-identical to 0.4.0.
+
+- `__version__` now reads from package metadata
+  (`importlib.metadata.version("satsignal-mcp")`) instead of a
+  hard-coded literal. `pyproject.toml` is the single source of truth
+  (matches `satsignal-cli`). New `tests/test_version.py` asserts the
+  resolved string matches the installed dist (PR #7).
+- First release published via PyPI Trusted Publishers (OIDC); new
+  `.github/workflows/publish.yml` handshakes with PyPI directly on
+  `release: published`. No API tokens, no `~/.pypirc` (PR #6).
+- Tool surface unchanged from 0.4.0 (seven tools, six callable + one
+  fail-closed `verify_bundle` redirect; removal scheduled for 0.5.x).
+
 ## 0.4.0
 
 Fail-close the deprecated `verify_bundle` alias — closes the v0.2
