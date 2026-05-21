@@ -27,7 +27,7 @@ jobs:
         run: |
           uv venv .smoke
           . .smoke/bin/activate
-          pip install dist/*.whl
+          uv pip install dist/*.whl
           python -c "import satsignal_mcp; print('import OK', satsignal_mcp.__version__ if hasattr(satsignal_mcp, '__version__') else '(no __version__)')"
       - uses: actions/upload-artifact@v4
         with:
