@@ -83,6 +83,20 @@ Add this to `claude_desktop_config.json`:
 }
 ```
 
+### Why the `env` block matters (host env-var binding)
+
+MCP hosts (Claude Desktop, Claude Code, agent frameworks) typically
+strip or rebind environment variables at server-launch time — so a
+`SATSIGNAL_API_KEY` set in the operator's shell does NOT reliably
+propagate into the MCP server process. Bind the key **explicitly**
+inside the `env` block of the host's config (as shown above); do
+not assume process-env inheritance.
+
+If anchor calls return `401 unauthorized` despite the key being
+visible in your shell (`echo $SATSIGNAL_API_KEY` works), this is
+almost certainly the cause — check the host's config block, not the
+shell environment.
+
 ## Verification model
 
 Each anchor returns a `proof_id`, `txid`, and `proof_url` (carrying the
