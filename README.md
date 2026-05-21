@@ -22,7 +22,7 @@ and returns a receipt the agent can save or pass on.
 | `lookup_hash`                | no  | check if a sha256 is on-chain |
 | `verify_file_against_bundle` | no  | **full verify** — re-hash the original file, confirm it matches the bundle, chain-confirm via public block explorers. Detects file tampering. |
 | `chain_confirm_bundle`       | no  | chain-confirm only — open a local `.mbnt`, extract sha+txid, confirm via `lookup_hash`. Fast, but does NOT detect file tampering. |
-| `verify_bundle`              | no  | _deprecated_ alias of `chain_confirm_bundle`; removable in 0.5 |
+| `verify_bundle`              | no  | _deprecated + fail-closed_ (v0.4) — returns `deprecated_tool_blocked` error directing to `verify_file_against_bundle` or `chain_confirm_bundle`. Removable in 0.5. |
 
 `anchor_*` tools accept `dry_run: true` to preview the sha256 without
 broadcasting. The Satsignal API itself does **not** honor `dry_run` —
@@ -108,8 +108,13 @@ pick the one that matches what you have on hand:
   is not detected** — the bundle stays self-consistent. Use this when
   the original file isn't available, or as a cheap pre-check.
 
-`verify_bundle` is kept as a deprecated alias of `chain_confirm_bundle`
-for 0.3.x → 0.4.x; removable in 0.5.
+`verify_bundle` in v0.3 silently aliased `chain_confirm_bundle`,
+preserving v0.2's false-PASS class on tampered originals (a host that
+strips tool descriptions wouldn't see the deprecation warning). In v0.4
+the alias fail-closes — every call returns a `deprecated_tool_blocked`
+structured error directing the caller at the right tool. The tool
+remains listed so callers pinned by name get the redirect rather than
+`unknown_tool`. Full removal lands in 0.5.
 
 ## Security notes
 

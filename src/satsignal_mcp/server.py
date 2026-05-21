@@ -21,7 +21,7 @@ network call. If both `folder` and `matter` are sent with non-empty
 values that DIFFER, the tool returns a validation error rather than
 silently picking one.
 
-Tools (v0.3):
+Tools (v0.4):
   anchor_file                  sha256 a local file, POST to /api/v1/anchors.
   anchor_text                  sha256 a UTF-8 string.
   anchor_json                  Canonicalize JSON (sort_keys), sha256, anchor.
@@ -34,8 +34,11 @@ Tools (v0.3):
                                compare to the bundle's claimed sha,
                                and chain-confirm via public block
                                explorers. Detects tampering.
-  verify_bundle                Deprecated alias of chain_confirm_bundle
-                               (still works; will be removed in 0.5).
+  verify_bundle                Deprecated + FAIL-CLOSED (v0.4): every
+                               call returns a structured error
+                               (deprecated_tool_blocked) directing the
+                               caller to verify_file_against_bundle or
+                               chain_confirm_bundle. Removable in 0.5.
 
 Dry-run policy: every anchor tool accepts `dry_run: bool = false`. When
 true the tool computes the sha + canonical bytes and returns a preview
@@ -375,11 +378,16 @@ def _tool_definitions() -> list[mtypes.Tool]:
         mtypes.Tool(
             name="verify_bundle",
             description=(
-                "DEPRECATED — alias of chain_confirm_bundle (chain "
-                "only, does NOT detect file tampering). Still works "
-                "byte-identically; will be removed in 0.5. Switch to "
-                "chain_confirm_bundle (same semantics) or "
-                "verify_file_against_bundle (full verify, recommended)."
+                "DEPRECATED + FAIL-CLOSED — this name silently produced "
+                "a chain-only confirmation under a name that implied "
+                "full verify (the v0.2 false-PASS class). v0.4 blocks "
+                "the alias: any call returns a structured error "
+                "(deprecated_tool_blocked) directing you to "
+                "verify_file_against_bundle (full verify, recommended) "
+                "or chain_confirm_bundle (chain-only, accurate name). "
+                "The tool is still listed so callers pinned by name "
+                "get the redirect instead of unknown_tool. Removable "
+                "in 0.5."
             ),
             inputSchema={
                 "type": "object",
@@ -791,16 +799,46 @@ async def _handle_verify_file_against_bundle(
     return _text_response(payload)
 
 
+async def _handle_verify_bundle_blocked(
+    args: dict, api: SatsignalApi,  # both unused
+) -> list[mtypes.TextContent]:
+    """Hard-block the deprecated verify_bundle alias.
+
+    v0.3 deprecated this name but still routed it to chain_confirm_bundle,
+    which silently produced `verified=true` on tampered originals — the
+    v0.2 false-PASS class. v0.4 fail-closes the alias: every call returns
+    a structured error directing the caller to the right v0.3 split tool.
+    Removable in 0.5.
+    """
+    return _error_response(
+        "verify_bundle is deprecated and intentionally fail-closed in 0.4. "
+        "For full verification (detects file tampering), call "
+        "verify_file_against_bundle(file_path, bundle_path). For the same "
+        "chain-only semantics this alias used to provide, call "
+        "chain_confirm_bundle(bundle_path) — accepts the legacy `path` "
+        "alias. verify_bundle will be removed entirely in 0.5.",
+        code="deprecated_tool_blocked",
+        deprecated_tool="verify_bundle",
+        full_verify_tool="verify_file_against_bundle",
+        chain_only_tool="chain_confirm_bundle",
+        removal_version="0.5",
+    )
+
+
 _HANDLERS = {
     "anchor_file": _handle_anchor_file,
     "anchor_text": _handle_anchor_text,
     "anchor_json": _handle_anchor_json,
     "lookup_hash": _handle_lookup_hash,
     # chain_confirm_bundle is the canonical name; verify_bundle is the
-    # frozen legacy alias (deprecated 0.3, removable 0.5). Same handler;
-    # the handler accepts either `bundle_path` or `path` in args.
+    # legacy alias name (deprecated 0.3, fail-closed 0.4, removable 0.5).
+    # The alias no longer routes to chain_confirm — it fail-closes with a
+    # structured redirect (deprecated_tool_blocked) because routing to
+    # chain-only under a name that implies full verify was the v0.2
+    # false-PASS class. chain_confirm_bundle itself still accepts either
+    # `bundle_path` or `path` in args.
     "chain_confirm_bundle": _handle_chain_confirm_bundle,
-    "verify_bundle": _handle_chain_confirm_bundle,
+    "verify_bundle": _handle_verify_bundle_blocked,
     "verify_file_against_bundle": _handle_verify_file_against_bundle,
 }
 

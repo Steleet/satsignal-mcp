@@ -26,14 +26,11 @@ from satsignal_mcp.server import (
     _handle_anchor_text,
     _handle_chain_confirm_bundle,
     _handle_lookup_hash,
+    _handle_verify_bundle_blocked,
     _handle_verify_file_against_bundle,
     _resolve_folder,
     _tool_definitions,
 )
-
-# v0.3 rename: verify_bundle handler is now _handle_chain_confirm_bundle.
-# Existing tests continue to call the same code path via this alias.
-_handle_verify_bundle = _handle_chain_confirm_bundle
 
 
 def _run(coro):
@@ -229,7 +226,15 @@ class LookupHashTest(unittest.TestCase):
         self.assertEqual(payload["reason"], "sha_not_indexed_as_file_hash")
 
 
-class VerifyBundleTest(unittest.TestCase):
+class ChainConfirmBundleTest(unittest.TestCase):
+    """Tests for chain_confirm_bundle's core semantics.
+
+    Historically this class was named VerifyBundleTest (pre-v0.3) and
+    covered the verify_bundle handler; v0.3 renamed the handler and v0.4
+    fail-closes the verify_bundle alias entirely. The body still tests
+    the chain-confirm semantics it always did, just under a name that
+    matches the canonical handler.
+    """
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -241,7 +246,7 @@ class VerifyBundleTest(unittest.TestCase):
     def _write_bundle(self, manifest: dict, canonical: dict | None = None
                        ) -> None:
         if canonical is None:
-            # Default canonical has the document_sha256 verify_bundle
+            # Default canonical has the document_sha256 the handler
             # actually reads (manifest only carries the 40-hex
             # doc_hash_expected; the 64-hex file sha lives in canonical).
             canonical = {"subject": {"document_sha256": "a" * 64}}
@@ -255,7 +260,9 @@ class VerifyBundleTest(unittest.TestCase):
         api.lookup_hash.return_value = {
             "bundle_id": "b1", "txid": "t" * 64, "created_utc": "x",
         }
-        result = _run(_handle_verify_bundle({"path": str(self.bundle)}, api))
+        result = _run(_handle_chain_confirm_bundle(
+            {"path": str(self.bundle)}, api,
+        ))
         payload = _parse(result)
         self.assertTrue(payload["verified"])
 
@@ -269,7 +276,9 @@ class VerifyBundleTest(unittest.TestCase):
             "bundle_id": "b1", "txid": "t" * 64,  # real
             "created_utc": "x",
         }
-        result = _run(_handle_verify_bundle({"path": str(self.bundle)}, api))
+        result = _run(_handle_chain_confirm_bundle(
+            {"path": str(self.bundle)}, api,
+        ))
         payload = _parse(result)
         self.assertFalse(payload["verified"])
         self.assertEqual(payload["reason"], "txid_mismatch")
@@ -278,7 +287,9 @@ class VerifyBundleTest(unittest.TestCase):
         self._write_bundle({"txid": "t" * 64})
         api = mock.AsyncMock()
         api.lookup_hash.return_value = {"miss": True, "reason": "x"}
-        result = _run(_handle_verify_bundle({"path": str(self.bundle)}, api))
+        result = _run(_handle_chain_confirm_bundle(
+            {"path": str(self.bundle)}, api,
+        ))
         payload = _parse(result)
         self.assertFalse(payload["verified"])
         self.assertEqual(payload["reason"], "sha_not_indexed")
@@ -292,7 +303,9 @@ class VerifyBundleTest(unittest.TestCase):
             canonical={"subject": {"byte_exact_commitment": "c" * 64}},
         )
         api = mock.AsyncMock()
-        result = _run(_handle_verify_bundle({"path": str(self.bundle)}, api))
+        result = _run(_handle_chain_confirm_bundle(
+            {"path": str(self.bundle)}, api,
+        ))
         payload = _parse(result)
         self.assertEqual(payload["error"], "no_file_sha")
         self.assertEqual(payload["manifest_mode"], "sealed")
@@ -314,8 +327,59 @@ class VerifyBundleTest(unittest.TestCase):
         api.lookup_hash.return_value = {
             "bundle_id": "b1", "txid": "t" * 64, "created_utc": "x",
         }
-        _run(_handle_verify_bundle({"path": str(self.bundle)}, api))
+        _run(_handle_chain_confirm_bundle(
+            {"path": str(self.bundle)}, api,
+        ))
         api.lookup_hash.assert_called_once_with("9" * 64)
+
+
+class VerifyBundleBlockedTest(unittest.TestCase):
+    """v0.4 fail-close: verify_bundle returns structured error on every call.
+
+    Closes the v0.2 false-PASS class — a tampered original used to pass
+    verified=true via the chain-only handler under a name implying full
+    verify. The alias is still listed (callers pinned by name don't get
+    unknown_tool), but the handler returns deprecated_tool_blocked.
+    """
+
+    def test_returns_deprecated_tool_blocked_error(self):
+        api = mock.AsyncMock()
+        result = _run(_handle_verify_bundle_blocked(
+            {"path": "/tmp/anything"}, api,
+        ))
+        payload = _parse(result)
+        self.assertEqual(payload["error"], "deprecated_tool_blocked")
+        self.assertEqual(payload["deprecated_tool"], "verify_bundle")
+        self.assertEqual(payload["full_verify_tool"],
+                         "verify_file_against_bundle")
+        self.assertEqual(payload["chain_only_tool"],
+                         "chain_confirm_bundle")
+        self.assertEqual(payload["removal_version"], "0.5")
+        api.lookup_hash.assert_not_called()
+
+    def test_does_not_open_bundle_file(self):
+        # Even with a nonexistent path, no I/O happens — the redirect
+        # is structural, not contingent on bundle contents.
+        api = mock.AsyncMock()
+        result = _run(_handle_verify_bundle_blocked(
+            {"path": "/nonexistent/path"}, api,
+        ))
+        payload = _parse(result)
+        self.assertEqual(payload["error"], "deprecated_tool_blocked")
+
+    def test_handlers_dict_routes_verify_bundle_to_blocked(self):
+        from satsignal_mcp.server import _HANDLERS
+        self.assertIs(_HANDLERS["verify_bundle"],
+                      _handle_verify_bundle_blocked)
+
+    def test_tool_still_listed_with_fail_closed_description(self):
+        from satsignal_mcp.server import _tool_definitions
+        tools = {t.name: t for t in _tool_definitions()}
+        self.assertIn("verify_bundle", tools)
+        desc = tools["verify_bundle"].description
+        self.assertIn("DEPRECATED", desc)
+        self.assertIn("FAIL-CLOSED", desc)
+        self.assertIn("deprecated_tool_blocked", desc)
 
 
 class ToolDefinitionTest(unittest.TestCase):
@@ -586,10 +650,11 @@ class AnchorHandlerAliasWireTest(unittest.TestCase):
 
 
 class ChainConfirmBundleAliasTest(unittest.TestCase):
-    """v0.3: chain_confirm_bundle is the canonical name; verify_bundle
-    keeps working byte-identically as a deprecated alias. The handler
-    also accepts the new `bundle_path` arg and the legacy `path` alias,
-    refusing on differing non-empty values."""
+    """v0.3: chain_confirm_bundle is the canonical name and accepts both
+    the new `bundle_path` arg and the legacy `path` alias, refusing on
+    differing non-empty values. (v0.4 separately fail-closed the
+    verify_bundle name so it no longer routes here — see
+    VerifyBundleBlockedTest.)"""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -647,12 +712,17 @@ class ChainConfirmBundleAliasTest(unittest.TestCase):
         self.assertEqual(payload["error"], "missing_bundle_path")
         api.lookup_hash.assert_not_called()
 
-    def test_verify_bundle_dispatches_same_handler(self):
-        """Dispatch parity: the deprecated verify_bundle name routes
-        to the same handler so its behavior is byte-identical."""
+    def test_verify_bundle_no_longer_dispatches_to_chain_confirm(self):
+        """v0.4 fail-close: the deprecated verify_bundle name must NOT
+        route to chain_confirm_bundle anymore — that's the v0.2
+        false-PASS class. It now routes to the blocked handler that
+        returns deprecated_tool_blocked. See VerifyBundleBlockedTest
+        for the full contract."""
         from satsignal_mcp.server import _HANDLERS
+        self.assertIsNot(_HANDLERS["verify_bundle"],
+                         _HANDLERS["chain_confirm_bundle"])
         self.assertIs(_HANDLERS["verify_bundle"],
-                      _HANDLERS["chain_confirm_bundle"])
+                      _handle_verify_bundle_blocked)
 
 
 class VerifyFileAgainstBundleTest(unittest.TestCase):
