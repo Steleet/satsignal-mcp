@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.0
+
+Fail-close the deprecated `verify_bundle` alias — closes the v0.2
+false-PASS class.
+
+A 2026-05-21 cold-start review (six-vector probe, finding 5) flagged
+that the deprecated `verify_bundle` alias in v0.3 still produced
+`verified=true` on tampered originals: the alias kept its v0.2
+chain-only semantics under a name that implied full verify. The
+deprecation description warned LLMs, but a host that strips tool
+descriptions reintroduces the trap. This is the exact failure class
+v0.3's verify split was meant to retire — v0.3 retired it for the new
+canonical names, but not for the legacy alias.
+
+- **`verify_bundle` now fail-closes.** The tool is still listed (so
+  callers pinned by name don't get `unknown_tool`), but every call
+  returns a structured error (`code="deprecated_tool_blocked"`) naming
+  the failure class and directing the caller to:
+  - `verify_file_against_bundle(file_path, bundle_path)` — full
+    verify (detects file tampering); the safe default.
+  - `chain_confirm_bundle(bundle_path)` — chain-confirm only; same
+    semantics `verify_bundle` used to provide, under an accurate name.
+- The error payload includes `deprecated_tool`, `full_verify_tool`,
+  `chain_only_tool`, and `removal_version` fields so a programmatic
+  caller can introspect and migrate without parsing the message.
+- No change to `chain_confirm_bundle` or `verify_file_against_bundle`
+  behavior — they keep v0.3.0 semantics byte-identically.
+- Removal schedule unchanged: full alias removal lands in 0.5.x; 0.4.x
+  keeps the structured-error stub so callers see the redirect, not
+  `unknown_tool`.
+
 ## 0.3.0
 
 Verify split — additive new tool + safer naming. Fully
