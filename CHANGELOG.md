@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.2
+
+Cluster D from the 2026-05-22 cold-start probe. Closes one HIGH and two MEDIUM findings. Wire-shape impact only on the previously-broken `anchor_json` bug path. Released 2026-05-22.
+
+- **`anchor_json` no longer silently anchors a wrong sha when an MCP host string-coerces structured arguments (H#16).** Two-part fix:
+  - **Schema:** the `data` property now declares `"type": ["object", "array", "string", "number", "boolean", "null"]` (JSON Schema's "any JSON value"). Pre-0.5.2 the property omitted `type` entirely, letting non-spec-validating hosts transport the value as its JSON-encoded string form without surfacing the violation. Spec-conformant clients that validate against the (newly explicit) schema see no change to their previously-successful calls.
+  - **Handler guard:** before any canonicalize / network call, if `data` arrives as a string that `json.loads` parses to a non-string value (dict / list / number / bool / null), the tool returns a structured error with `code="string_coerced_data"` and a message explaining the host-side transport bug, instead of canonicalizing the escaped-quoted string form and anchoring those bytes on-chain. Strings that parse as JSON strings, or don't parse at all, flow through as before — the caller genuinely meant to anchor a string.
+  - **Behavior change framing:** clients that were hitting the bug path were already broken (anchoring a different sha than the agent intended, silently). They now fail loudly with `isError=true` and `code="string_coerced_data"` instead — fix-not-break, but it IS a behavior change for callers who were relying on the (buggy) implicit transport coercion. Clients sending structured `data` correctly see no change.
+  - **New error code:** `string_coerced_data` (added to the small set of `_error_response` codes — joins `missing_data`, `canonicalization_failed`, `conflicting_alias`).
+  - Regression tests cover the five non-string parsed types, dry-run + real-anchor mode, and the three fall-through paths (string-of-string, unparseable, structured value).
+- **RELEASE.md "Honest status" paragraph refreshed (M#23).** Was pinned to 0.4.1 / 2026-05-21; now reflects the 0.5.1 explicit-`attestations: true` pilot result — provenance is still null on PyPI, the implicit-vs-explicit hypothesis is disconfirmed, root cause lies elsewhere. The OIDC publish guarantee remains live; the Sigstore attestation guarantee remains staged-but-not-delivered.
+- **README "Verification model" paragraph tightened (M#24).** Was claiming each anchor returns `proof_id` + `proof_url` (carrying the legacy `bundle_id` / `receipt_url`). The wire response carries only the legacy names — `bundle_id` and `receipt_url` — and the `proof_*` rename lives in `proof.satsignal.cloud`'s UI / marketing layer, not in the MCP response. README now describes the actual response honestly. No wire change.
+
+This release does NOT fix the PyPI `provenance: null` issue (separate; tracked).
+
 ## 0.5.1
 
 Release-infrastructure pilot. No user-visible behavior change; tool surface byte-identical to 0.5.0. Released 2026-05-22.
