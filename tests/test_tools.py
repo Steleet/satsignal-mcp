@@ -37,10 +37,17 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _parse(response_list) -> dict:
-    """Helper: pull the JSON payload out of a TextContent response."""
-    assert len(response_list) == 1
-    return json.loads(response_list[0].text)
+def _parse(response) -> dict:
+    """Helper: pull the JSON payload out of a tool response.
+
+    v0.5.0 changed handler return type from `list[TextContent]` to
+    `CallToolResult` (closes the missing-isError finding). Accept both
+    shapes so per-handler assertions remain spelled the same way; an
+    explicit `CallToolResultShapeTest` pins the new wrapper itself.
+    """
+    content = response.content if hasattr(response, "content") else response
+    assert len(content) == 1
+    return json.loads(content[0].text)
 
 
 def _stub_anchor_result(*, sha: str, matter: str = "inbox",
@@ -894,6 +901,90 @@ class VerifyFileAgainstBundleTest(unittest.TestCase):
             ))
             _, kwargs = vf.call_args
             self.assertFalse(kwargs["offline"])
+
+
+class CallToolResultShapeTest(unittest.TestCase):
+    """v0.5.0: tool handlers return `CallToolResult` with `isError`
+    set, not bare `list[TextContent]`. Programmatic MCP clients branch
+    on `result.isError` to distinguish error from success — the
+    pre-0.5 bare list had no flag, so errors looked like success.
+
+    These tests pin the wrapper itself. The text body shape inside the
+    wrapper is unchanged (`{"error": <code>, "message": <human>, ...}`
+    on errors, the tool-specific payload on success) — naive clients
+    reading `content[0].text` see no regression; clients respecting
+    `isError` per the MCP protocol now classify errors correctly.
+    """
+
+    def test_success_path_sets_isError_false(self):
+        """A successful tool call returns a CallToolResult with
+        isError=False. Use lookup_hash with a stub'd hit — the
+        cheapest success path that doesn't touch the filesystem."""
+        import mcp.types as mtypes
+        api = mock.AsyncMock()
+        api.lookup_hash.return_value = {
+            "bundle_id": "b1", "txid": "t" * 64,
+            "created_utc": "2026-05-22T00:00:00Z",
+        }
+        result = _run(_handle_lookup_hash(
+            {"sha256_hex": "a" * 64}, api,
+        ))
+        self.assertIsInstance(result, mtypes.CallToolResult)
+        self.assertFalse(result.isError)
+        # Naive-client back-compat: text body still parses + has the
+        # success shape, no "error" key.
+        payload = _parse(result)
+        self.assertTrue(payload["hit"])
+        self.assertNotIn("error", payload)
+
+    def test_error_path_sets_isError_true(self):
+        """The error path (any tool, any error code) returns a
+        CallToolResult with isError=True. Use lookup_hash with a
+        non-string sha — cheapest error path."""
+        import mcp.types as mtypes
+        api = mock.AsyncMock()
+        result = _run(_handle_lookup_hash({}, api))
+        self.assertIsInstance(result, mtypes.CallToolResult)
+        self.assertTrue(result.isError)
+        api.lookup_hash.assert_not_called()
+
+    def test_error_text_body_shape_preserved(self):
+        """Back-compat: the JSON body inside the error CallToolResult
+        still has the pre-0.5 shape (`error` code key + `message`
+        key), so existing clients that ignore isError and just parse
+        the body still work byte-identically."""
+        api = mock.AsyncMock()
+        result = _run(_handle_lookup_hash({}, api))
+        payload = _parse(result)
+        self.assertEqual(payload["error"], "missing_sha")
+        self.assertIn("message", payload)
+        self.assertIsInstance(payload["message"], str)
+
+    def test_call_tool_handler_returns_CallToolResult(self):
+        """The @server.call_tool() handler itself returns a
+        CallToolResult (covers the dispatcher's own error path —
+        unknown_tool — not just per-handler errors)."""
+        import mcp.types as mtypes
+        from satsignal_mcp.server import build_server
+
+        # build_server registers handlers via decorators on a local
+        # Server; we can't easily call the dispatcher through that.
+        # The handlers themselves are tested above; the dispatcher
+        # wraps them, so the return-type annotation is the contract.
+        # Pin the annotation directly.
+        import inspect
+        # Read the source of build_server and confirm call_tool is
+        # annotated to return CallToolResult.
+        src = inspect.getsource(build_server)
+        self.assertIn("CallToolResult", src)
+        # And confirm the dispatcher's error helper itself returns
+        # CallToolResult on the unknown_tool branch (which is what the
+        # dispatcher reaches when name doesn't match any registered
+        # tool).
+        from satsignal_mcp.server import _error_response
+        result = _error_response("test", code="unknown_tool")
+        self.assertIsInstance(result, mtypes.CallToolResult)
+        self.assertTrue(result.isError)
 
 
 if __name__ == "__main__":

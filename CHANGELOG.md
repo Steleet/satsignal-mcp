@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.0
+
+Two cold-start LOW findings closed (Probe c). MCP API conformance + JCS
+spec-conformance fix.
+
+- **MCP error signal (`isError`).** All tool handlers now return
+  `CallToolResult` with `isError: true` on the error path (was bare
+  `list[TextContent]` with the error code in the JSON body but no
+  isError flag). Programmatic clients branching on `result.isError`
+  now correctly distinguish error from success. The text body shape is
+  unchanged: error payload is still `{"error": "<code>", "message":
+  "<human>", ...}`. Naive clients that ignored isError see no change;
+  clients that respect the flag (per MCP protocol) gain correct error
+  detection.
+- **Canonicalize: full RFC 8785 JCS.** `satsignal_mcp.canonicalize`
+  now implements full JCS: NFC-normalize string values and dict
+  keys; sort dict keys by UTF-16-BE byte order (not simple
+  lexicographic). Previous impl used `json.dumps(sort_keys=True, …)`
+  which agrees with JCS for ASCII-only payloads but diverges on any
+  document with multibyte unicode (combining diacritics, rare
+  scripts). The CLI's RFC 8785 impl has been the authoritative
+  reference all along; satsignal-mcp was non-compliant. **Wire
+  impact:** the canonical bytes for non-ASCII payloads change, so the
+  sha256 changes, so bundles anchored via satsignal-mcp ≤0.4.1 with
+  non-ASCII content will NOT verify with satsignal-mcp ≥0.5.0 (or
+  with satsignal-cli, which they already didn't). ASCII-only bundles
+  are byte-identical. Cross-tool interop bug closed.
+
+New regression tests cover both behaviors (CallToolResult isError flag
++ JCS unicode handling: NFC, UTF-16-BE sort, multibyte values, plus
+cross-validation against satsignal-cli's authoritative `_jcs`).
+
 ## 0.4.1
 
 Maintenance release — no user-visible behavior change. Tool surface
