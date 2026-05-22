@@ -56,4 +56,3 @@ jobs:
         with:
           attestations: true
         # No `password:` — its presence disables OIDC.
-        # `attestations: true` is the action default; left implicit.
