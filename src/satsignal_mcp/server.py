@@ -405,16 +405,38 @@ def _tool_definitions() -> list[mtypes.Tool]:
 
 # ─────────────────────────── tool handlers ────────────────────────────
 
-def _text_response(payload: Any) -> list[mtypes.TextContent]:
-    return [mtypes.TextContent(
-        type="text",
-        text=json.dumps(payload, indent=2, sort_keys=True),
-    )]
+def _text_response(payload: Any) -> mtypes.CallToolResult:
+    """Success response — wraps the JSON body in a `CallToolResult` with
+    `isError=False` so MCP clients branching on `result.isError` (per
+    protocol) correctly classify it. Text body shape is byte-identical
+    to the pre-0.5 list[TextContent] return — naive clients reading
+    `content[0].text` see no change."""
+    return mtypes.CallToolResult(
+        content=[mtypes.TextContent(
+            type="text",
+            text=json.dumps(payload, indent=2, sort_keys=True),
+        )],
+        isError=False,
+    )
 
 
 def _error_response(message: str, *, code: str = "error",
-                    **extras: Any) -> list[mtypes.TextContent]:
-    return _text_response({"error": code, "message": message, **extras})
+                    **extras: Any) -> mtypes.CallToolResult:
+    """Error response — wraps the JSON body in a `CallToolResult` with
+    `isError=True` so MCP clients branching on `result.isError` (per
+    protocol) correctly distinguish error from success. Text body shape
+    preserved: `{"error": <code>, "message": <human>, ...extras}`."""
+    return mtypes.CallToolResult(
+        content=[mtypes.TextContent(
+            type="text",
+            text=json.dumps(
+                {"error": code, "message": message, **extras},
+                indent=2,
+                sort_keys=True,
+            ),
+        )],
+        isError=True,
+    )
 
 
 def _anchor_result_payload(*, sha: str, matter: str, label: str | None,
@@ -449,7 +471,7 @@ def _hash_file(path: Path, *, chunk_size: int = 1 << 20) -> tuple[str, int]:
 
 
 async def _handle_anchor_file(args: dict, api: SatsignalApi
-                              ) -> list[mtypes.TextContent]:
+                              ) -> mtypes.CallToolResult:
     raw_path = args.get("path") or ""
     if not isinstance(raw_path, str) or not raw_path:
         return _error_response("path is required", code="missing_path")
@@ -502,7 +524,7 @@ async def _handle_anchor_file(args: dict, api: SatsignalApi
 
 
 async def _handle_anchor_text(args: dict, api: SatsignalApi
-                              ) -> list[mtypes.TextContent]:
+                              ) -> mtypes.CallToolResult:
     text = args.get("text")
     if not isinstance(text, str):
         return _error_response("text is required (string)", code="missing_text")
@@ -549,7 +571,7 @@ async def _handle_anchor_text(args: dict, api: SatsignalApi
 
 
 async def _handle_anchor_json(args: dict, api: SatsignalApi
-                              ) -> list[mtypes.TextContent]:
+                              ) -> mtypes.CallToolResult:
     if "data" not in args:
         return _error_response("data is required", code="missing_data")
     try:
@@ -603,7 +625,7 @@ async def _handle_anchor_json(args: dict, api: SatsignalApi
 
 
 async def _handle_lookup_hash(args: dict, api: SatsignalApi
-                              ) -> list[mtypes.TextContent]:
+                              ) -> mtypes.CallToolResult:
     sha = args.get("sha256_hex")
     if not isinstance(sha, str):
         return _error_response("sha256_hex is required (string)",
@@ -646,7 +668,7 @@ def _extract_bundle_claims(bundle_path: Path) -> tuple[dict, dict]:
 
 
 async def _handle_chain_confirm_bundle(args: dict, api: SatsignalApi
-                                       ) -> list[mtypes.TextContent]:
+                                       ) -> mtypes.CallToolResult:
     # Accept both `bundle_path` (new canonical name) and `path` (legacy
     # alias, still emitted by the deprecated verify_bundle tool). If
     # both are sent with different non-empty values, that's a caller
@@ -746,7 +768,7 @@ _VERIFIED_CLASSES = frozenset({VerifyClass.VERIFIED, VerifyClass.PENDING})
 
 async def _handle_verify_file_against_bundle(
     args: dict, api: SatsignalApi,  # api unused — kept for dispatch parity
-) -> list[mtypes.TextContent]:
+) -> mtypes.CallToolResult:
     raw_file = args.get("file_path")
     raw_bundle = args.get("bundle_path")
     if not isinstance(raw_file, str) or not raw_file.strip():
@@ -801,7 +823,7 @@ async def _handle_verify_file_against_bundle(
 
 async def _handle_verify_bundle_blocked(
     args: dict, api: SatsignalApi,  # both unused
-) -> list[mtypes.TextContent]:
+) -> mtypes.CallToolResult:
     """Hard-block the deprecated verify_bundle alias.
 
     v0.3 deprecated this name but still routed it to chain_confirm_bundle,
@@ -855,7 +877,7 @@ def build_server() -> Server:
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict | None
-                        ) -> list[mtypes.TextContent]:
+                        ) -> mtypes.CallToolResult:
         handler = _HANDLERS.get(name)
         if handler is None:
             return _error_response(
