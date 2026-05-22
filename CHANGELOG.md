@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1
+
+Release-infrastructure pilot. No user-visible behavior change; tool surface byte-identical to 0.5.0. Released 2026-05-22.
+
+- **Explicit `attestations: true` on `pypa/gh-action-pypi-publish@release/v1`.** Sets the input explicitly in `.github/workflows/publish.yml` rather than relying on the action's documented default. Tests a hypothesis surfaced during a 2026-05-22 investigation: three prior PyPI releases (mcp 0.4.1, mcp 0.5.0, satsignal-cli 0.4.2) all shipped with no Sigstore attestation visible on PyPI (`provenance: null` / `urls[].provenance` absent), despite the action's run log showing attestation generation + Rekor anchoring + clean exit. PyPI's `/integrity/.../provenance` endpoint returns 404 for all six prior artifacts. The Trusted Publisher row on PyPI has the correct `Environment name: pypi`, so the asymmetry (upload accepted, attestation silently dropped) suggests either an implicit-vs-explicit default-resolution gap in the action or a stale PyPI publisher binding. This release tests the first hypothesis.
+- Tool surface unchanged from 0.5.0 (seven tools, six callable + one fail-closed `verify_bundle` redirect; removal still scheduled for a later 0.5.x).
+
 ## 0.5.0
 
 Two cold-start LOW findings closed (Probe c). MCP API conformance + JCS

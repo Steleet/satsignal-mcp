@@ -53,5 +53,6 @@ jobs:
           path: dist/
       - name: Publish to PyPI (Trusted Publishers / OIDC)
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: true
         # No `password:` — its presence disables OIDC.
-        # `attestations: true` is the action default; left implicit.
