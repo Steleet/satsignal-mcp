@@ -99,11 +99,14 @@ shell environment.
 
 ## Verification model
 
-Each anchor returns a `proof_id`, `txid`, and `proof_url` (carrying the
-legacy `bundle_id` / `receipt_url` values, which are still present). The
-proof is independent of Satsignal: anyone can fetch the bundle, verify
-the on-chain transaction directly against BSV, and check the sha256
-matches.
+Each anchor returns `bundle_id`, `txid`, and `receipt_url` (the legacy
+wire names, kept stable for back-compat — every Satsignal server,
+including older / self-hosted deployments, accepts and emits these
+exact keys). The same artifacts are what `proof.satsignal.cloud`'s
+public surfaces call a "proof" — the rename lives in the
+marketing/UI layer, not in the API response. The proof is independent
+of Satsignal: anyone can fetch the bundle, verify the on-chain
+transaction directly against BSV, and check the sha256 matches.
 
 This server exposes two verify tools with different trust assumptions —
 pick the one that matches what you have on hand:

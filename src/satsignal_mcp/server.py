@@ -263,6 +263,21 @@ def _tool_definitions() -> list[mtypes.Tool]:
                 "required": ["data"],
                 "properties": {
                     "data": {
+                        # JSON Schema "any JSON value" — spell out the full
+                        # type union so spec-conformant validators surface
+                        # the violation when a host string-coerces what
+                        # should be a structured value. Pre-0.5.2 this
+                        # property had no `type` at all; some MCP hosts
+                        # (notably Claude Desktop in certain configs)
+                        # silently transported structured args as their
+                        # JSON-encoded string form, producing a different
+                        # canonical sha than the caller intended. The
+                        # handler also runs a string-coercion-detection
+                        # guard as a belt-and-braces second line.
+                        "type": [
+                            "object", "array", "string",
+                            "number", "boolean", "null",
+                        ],
                         "description": (
                             "Any JSON value (object, array, string, "
                             "number, bool, null). NaN / Infinity / "
@@ -574,6 +589,36 @@ async def _handle_anchor_json(args: dict, api: SatsignalApi
                               ) -> mtypes.CallToolResult:
     if "data" not in args:
         return _error_response("data is required", code="missing_data")
+    # String-coercion guard: some MCP hosts string-coerce structured tool
+    # arguments at transport time, so a caller-intended dict / list / etc
+    # arrives here as its JSON-encoded string form. Canonicalizing that
+    # string produces the canonical bytes of the *escaped-quoted string*,
+    # not of the structured value — a silently-wrong sha gets anchored.
+    # If `data` is a string that parses as JSON to a non-string value,
+    # refuse loudly BEFORE any network call. Strings that legitimately
+    # round-trip as JSON-strings (or that don't parse at all) fall through
+    # to the existing canonicalize path — the caller meant to anchor a
+    # string. See H#16 in the 2026-05-22 cold-start probe.
+    raw_data = args["data"]
+    if isinstance(raw_data, str):
+        try:
+            parsed = json.loads(raw_data)
+        except (ValueError, TypeError):
+            parsed = raw_data  # genuine string payload — fall through
+        if not isinstance(parsed, str):
+            parsed_type = type(parsed).__name__
+            return _error_response(
+                f"data was sent as a string that parses as a JSON "
+                f"{parsed_type}. This is usually caused by an MCP host "
+                f"string-coercing structured arguments at transport "
+                f"time. Send the raw {parsed_type} as `data`, not its "
+                f"JSON-encoded string form. If you genuinely intended "
+                f"to anchor the literal JSON string, encode it as a "
+                f"JSON-string-of-a-string (e.g. `\"\\\"{{...}}\\\"\"`) "
+                f"or use anchor_text instead.",
+                code="string_coerced_data",
+                parsed_json_type=parsed_type,
+            )
     try:
         canonical = canonicalize(args["data"])
     except CanonicalizationError as e:
