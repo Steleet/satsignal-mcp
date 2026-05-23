@@ -31,7 +31,7 @@ What this means for an integrator:
 
 The publish job declares `permissions: attestations: write`, and `pypa/gh-action-pypi-publish@release/v1` defaults `attestations: true`. Each upload carries a PEP 740 Sigstore attestation that binds the artifact to the exact GitHub Actions workflow run that produced it.
 
-**Status as of `satsignal-mcp` 0.5.3 (2026-05-23):** PEP 740 attestations have been live and machine-verifiable since 0.4.1. The verification path is:
+**Status as of `satsignal-mcp` 0.5.4 (2026-05-23):** PEP 740 attestations have been live and machine-verifiable since 0.4.1. The verification path is:
 
 1. Fetch the PEP 691 simple-index JSON: `GET https://pypi.org/simple/satsignal-mcp/` with `Accept: application/vnd.pypi.simple.v1+json`. Each entry in `files[]` from 0.4.1 onward carries a populated `provenance` URL.
 2. Fetch the PEP 740 integrity endpoint at that URL — pattern `https://pypi.org/integrity/satsignal-mcp/<version>/<filename>/provenance`, Content-Type `application/vnd.pypi.integrity.v1+json`. The response is a Sigstore attestation bundle.

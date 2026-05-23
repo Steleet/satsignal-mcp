@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.4
+
+Ships the cluster j + cluster l fixes from the 2026-05-23 LOW sweep. Patch bump — docs + schema-description + classifier additions only; no behavior change in the MCP tool surface. Wire-shape byte-identical to 0.5.3. Released 2026-05-23 (intra-day follow-up to 0.5.3).
+
+- **`anchor_json` schema-description names the `string_coerced_data` error code (V1-L1).** The `data` property's description now names the structured error code that the 0.5.2 handler guard already returns, so MCP hosts that string-coerce structured args can trace the resulting `isError=true` response back to the schema rather than chasing it through the handler source. Cold-start probe rerun, 2026-05-22; PR #13 squash `cbad959`.
+- **README states the Python floor (V1-L2).** Install section now explicitly states `Requires Python 3.10 or newer.`, matching the floor that's already pinned in `pyproject.toml`. Same PR.
+- **README documents tool-schema inspection (V1-L3).** New `## Inspecting tool schemas` section explains how to extract schemas via the `_tool_definitions()` function, with a caveat that the leading underscore signals implementation-detail status — stable-API consumers should use the MCP protocol's `list_tools` request. Same PR.
+- **RELEASE.md attestation framing points at the canonical surfaces (V4-L2).** "What a third party can verify today" digest line now points at the canonical PEP 691 simple-index JSON for machine-verifiable attestation lookups; the legacy `/pypi/<pkg>/json` endpoint is retained only as a fallback with an explicit "predates PEP 740" framing. Same PR.
+- **`Development Status :: 4 - Beta` classifier declared (V4-L3).** `pyproject.toml` classifiers now declare `Development Status :: 4 - Beta`, matching the rest of the Satsignal package family (`satsignal-otel` already declared; `satsignal-cli` adding the same declaration in its concurrent 0.4.3 release). PR #14 squash `eedee12`.
+
 ## 0.5.3
 
 Documentation-only correction. Wire-shape byte-identical to 0.5.2. Released 2026-05-23.
