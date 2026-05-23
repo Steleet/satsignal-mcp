@@ -27,13 +27,29 @@ What this means for an integrator:
 - There is no long-lived `PYPI_API_TOKEN` on a maintainer's machine to leak, no `~/.pypirc`, no shared team secret.
 - Revocation is a single action in the PyPI UI (remove the Trusted Publisher entry); no token-rotation choreography.
 
-## Sigstore attestations (configured; not yet live)
+## Sigstore attestations
 
-The publish job also declares `permissions: attestations: write`, and `pypa/gh-action-pypi-publish@release/v1` defaults `attestations: true`. The intent is that each upload carries a Sigstore attestation visible on the PyPI release page — provable to come from this exact workflow run.
+The publish job declares `permissions: attestations: write`, and `pypa/gh-action-pypi-publish@release/v1` defaults `attestations: true`. Each upload carries a PEP 740 Sigstore attestation that binds the artifact to the exact GitHub Actions workflow run that produced it.
 
-**Honest status as of `satsignal-mcp` 0.5.1 (published 2026-05-22):** PyPI's JSON API at `https://pypi.org/pypi/satsignal-mcp/0.5.1/json` still reports `provenance: null` for both the sdist and the wheel. 0.5.1 was a deliberate pilot — it set `attestations: true` *explicitly* on `pypa/gh-action-pypi-publish@release/v1` rather than relying on the action's documented default, testing the hypothesis that an implicit-vs-explicit default-resolution gap was eating the attestation. The 0.5.1 publish did NOT resolve the issue: provenance remains null on PyPI, so the hypothesis is disconfirmed and the root cause lies elsewhere (stale Trusted Publisher binding or a PyPI-side ingest gap is the next likely candidate). 0.5.2 ships under the same publish pipeline; this paragraph will be updated when `provenance:` is non-null on the JSON API.
+**Status as of `satsignal-mcp` 0.5.3 (2026-05-23):** PEP 740 attestations have been live and machine-verifiable since 0.4.1. The verification path is:
 
-The OIDC publish guarantee (no maintainer token, no shared secret) is live and verifiable today. The Sigstore attestation guarantee (independently-verifiable build provenance) is staged but not yet delivered to the end-user-visible surface. This doc will be updated when `provenance:` is non-null on the JSON API.
+1. Fetch the PEP 691 simple-index JSON: `GET https://pypi.org/simple/satsignal-mcp/` with `Accept: application/vnd.pypi.simple.v1+json`. Each entry in `files[]` from 0.4.1 onward carries a populated `provenance` URL.
+2. Fetch the PEP 740 integrity endpoint at that URL — pattern `https://pypi.org/integrity/satsignal-mcp/<version>/<filename>/provenance`, Content-Type `application/vnd.pypi.integrity.v1+json`. The response is a Sigstore attestation bundle.
+3. Verify the bundle: the Sigstore certificate's Subject Alternative Name must bind the artifact to the expected workflow identity; the Rekor transparency-log entry must include the bundle; the attestation subject's sha256 must equal the artifact's sha256.
+
+Worked example, `satsignal-mcp` 0.5.2:
+
+- Predicate type: `https://docs.pypi.org/attestations/publish/v1`
+- Subject: `satsignal_mcp-0.5.2-py3-none-any.whl`, sha256 `cc781461f023457b5acca28e63cf52e2662afc2cbc9c32b9a86e4be6a392d466` (matches the wheel byte-exactly)
+- Certificate SAN: `https://github.com/Steleet/satsignal-mcp/.github/workflows/publish.yml@refs/tags/v0.5.2` and `https://github.com/Steleet/satsignal-mcp/actions/runs/26317880691/attempts/1`
+- Rekor entry: `logIndex` 1609430725, kind `dsse`, integrated 2026-05-23
+- Publisher: `{kind: GitHub, environment: pypi, repository: Steleet/satsignal-mcp, workflow: publish.yml}`
+
+The human-readable badge on `https://pypi.org/project/satsignal-mcp/<version>/` is not yet rendered — that surface is a separate PyPI roadmap item and will appear when PyPI ships it. It does not block today's verification. Separately, the legacy warehouse JSON at `https://pypi.org/pypi/satsignal-mcp/<version>/json` still reports `provenance: null` for every release file; that endpoint predates PEP 740 and is not the canonical attestation surface — we no longer use it as a gating signal.
+
+An earlier doc described an explicit-`attestations: true` pilot in 0.5.1 premised on `pypi.org/pypi/.../json` reporting `provenance: null` as a regression signal. The probe in 0.5.3 corrected the framing: that endpoint never carried PEP 740 metadata. The canonical surfaces are the PEP 691 simple-index JSON and the PEP 740 integrity endpoint, both populated since 0.4.1.
+
+Both the OIDC publish guarantee (no maintainer token, no shared secret) and the Sigstore attestation guarantee (independently-verifiable build provenance) are live and verifiable today on the machine-readable surface. Only the human-readable PyPI project-page badge is pending; this doc will be updated when that UI ships.
 
 ## Build flow
 
@@ -48,7 +64,7 @@ Actions are pinned to **major-tag form** (`@v4`, `@v5`, `@release/v1`), not SHA-
 - The release tag exists on `Steleet/satsignal-mcp` and matches the PyPI version.
 - The published artifacts' sha256 digests are reproduced in the PyPI JSON API at `https://pypi.org/pypi/satsignal-mcp/<version>/json` under `urls[].digests.sha256`.
 - The workflow file at `.github/workflows/publish.yml` on the matching commit reads as advertised.
-- *(Future, once attestations land on PyPI)* The Sigstore attestation on the PyPI release page will bind the wheel + sdist to a specific GitHub Actions workflow run.
+- The Sigstore attestation at `https://pypi.org/integrity/satsignal-mcp/<version>/<filename>/provenance` (URL discoverable from the PEP 691 simple-index JSON's `files[].provenance` field) binds the wheel + sdist to a specific GitHub Actions workflow run via the Sigstore certificate's Subject Alternative Name and a Rekor transparency-log entry. Live since 0.4.1.
 
 ## See also
 

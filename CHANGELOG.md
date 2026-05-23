@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.3
+
+Documentation-only correction. Wire-shape byte-identical to 0.5.2. Released 2026-05-23.
+
+- **Provenance-status framing corrected (erratum for 0.5.2 / 0.5.1 / 0.5.0 / 0.4.1 release notes).** Earlier release notes claimed the Sigstore attestation guarantee was "staged but not yet delivered to the end-user-visible surface" because the gating signal was `pypi.org/pypi/satsignal-mcp/<ver>/json` reporting `provenance: null`. That was the wrong signal — the legacy warehouse JSON predates PEP 740 and never carried PEP 740 metadata. The canonical surfaces are the PEP 691 simple-index JSON at `https://pypi.org/simple/satsignal-mcp/` (`files[].provenance` field) and the PEP 740 integrity endpoint at `https://pypi.org/integrity/satsignal-mcp/<ver>/<file>/provenance`. Both have been populated since 0.4.1. PEP 740 attestations on satsignal-mcp are therefore live and machine-verifiable today, and have been since 0.4.1. Only the human-readable badge on the PyPI project-page UI (`pypi.org/project/satsignal-mcp/<ver>/`) is not yet rendered; that is a separate PyPI roadmap item and does not block today's verification.
+- **Worked example, 0.5.2:** predicate type `https://docs.pypi.org/attestations/publish/v1`; subject sha256 `cc781461f023457b5acca28e63cf52e2662afc2cbc9c32b9a86e4be6a392d466` (matches the wheel `satsignal_mcp-0.5.2-py3-none-any.whl` byte-exactly); certificate Subject Alternative Name binds to `https://github.com/Steleet/satsignal-mcp/.github/workflows/publish.yml@refs/tags/v0.5.2` and Actions run `26317880691`; Rekor `logIndex` 1609430725, kind `dsse`.
+- **`RELEASE.md` updated** to reflect the corrected framing: the "Sigstore attestations" section now describes the two delivery surfaces (machine-verifiable: live; human-readable badge: pending) and gives the verification path with the 0.5.2 example. The "0.5.1 explicit-`attestations: true` pilot" narrative is retired — the attestation was already being published correctly from 0.4.1 onward; the pilot was answering a question that wasn't broken.
+- Older CHANGELOG entries (0.5.2, 0.5.1, 0.5.0, 0.4.1) are intentionally left untouched as historical record. This 0.5.3 entry is the erratum.
+
 ## 0.5.2
 
 Cluster D from the 2026-05-22 cold-start probe. Closes one HIGH and two MEDIUM findings. Wire-shape impact only on the previously-broken `anchor_json` bug path. Released 2026-05-22.
