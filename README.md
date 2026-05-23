@@ -61,6 +61,8 @@ shipped with the wrong default and silently 404'd every anchor call.
 
 ## Install
 
+Requires Python 3.10 or newer.
+
 ```bash
 pip install satsignal-mcp
 ```
