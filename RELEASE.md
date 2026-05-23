@@ -62,7 +62,7 @@ Actions are pinned to **major-tag form** (`@v4`, `@v5`, `@release/v1`), not SHA-
 ## What a third party can verify today
 
 - The release tag exists on `Steleet/satsignal-mcp` and matches the PyPI version.
-- The published artifacts' sha256 digests are reproduced in the PyPI JSON API at `https://pypi.org/pypi/satsignal-mcp/<version>/json` under `urls[].digests.sha256`.
+- The published artifacts' sha256 digests are reproduced in the PEP 691 simple-index JSON at `https://pypi.org/simple/satsignal-mcp/` (with `Accept: application/vnd.pypi.simple.v1+json`), under `files[].hashes.sha256`. This is the same surface that carries `files[].provenance` (the PEP 740 attestation URL), so a verifier can read digest + attestation pointer in a single fetch. The legacy `https://pypi.org/pypi/satsignal-mcp/<version>/json` endpoint also returns the digests under `urls[].digests.sha256`, but it predates PEP 740 and does NOT carry attestation metadata — for machine-verifiable attestation discovery, use the simple-index JSON and the PEP 740 integrity endpoint (`https://pypi.org/integrity/satsignal-mcp/<version>/<filename>/provenance`).
 - The workflow file at `.github/workflows/publish.yml` on the matching commit reads as advertised.
 - The Sigstore attestation at `https://pypi.org/integrity/satsignal-mcp/<version>/<filename>/provenance` (URL discoverable from the PEP 691 simple-index JSON's `files[].provenance` field) binds the wheel + sdist to a specific GitHub Actions workflow run via the Sigstore certificate's Subject Alternative Name and a Rekor transparency-log entry. Live since 0.4.1.
 
