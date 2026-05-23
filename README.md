@@ -67,6 +67,35 @@ Requires Python 3.10 or newer.
 pip install satsignal-mcp
 ```
 
+## Inspecting tool schemas
+
+The MCP tool schemas are built inline by `_tool_definitions()` in
+`src/satsignal_mcp/server.py` — they are not exposed as a static
+module-level binding. If you need a JSON dump (for static analysis,
+IDE autocomplete config, or tooling that pre-validates calls), call
+the function directly:
+
+```python
+import json
+from satsignal_mcp.server import _tool_definitions
+
+tools = _tool_definitions()
+print(json.dumps(
+    [{"name": t.name,
+      "description": t.description,
+      "inputSchema": t.inputSchema}
+     for t in tools],
+    indent=2,
+))
+```
+
+`_tool_definitions()` returns `list[mcp.types.Tool]`; the leading
+underscore reflects that the function is an implementation detail of
+the server, not a stable export. If you build tooling against it,
+pin to a specific `satsignal-mcp` version or run the MCP server and
+read tools via the protocol's `list_tools` request — the latter is
+the contract guaranteed to stay stable across releases.
+
 ## Claude Desktop config
 
 Add this to `claude_desktop_config.json`:
