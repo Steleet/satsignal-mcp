@@ -281,7 +281,13 @@ def _tool_definitions() -> list[mtypes.Tool]:
                         "description": (
                             "Any JSON value (object, array, string, "
                             "number, bool, null). NaN / Infinity / "
-                            "non-string keys are rejected."
+                            "non-string keys are rejected. If your "
+                            "MCP host string-coerces structured "
+                            "args, this tool returns "
+                            "code=\"string_coerced_data\" with "
+                            "isError=true rather than silently "
+                            "anchoring the JSON-encoded string's "
+                            "bytes; pass dict / list directly."
                         ),
                     },
                     "folder": folder_field,
