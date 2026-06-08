@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.5
+
+Bugfix. `chain_confirm_bundle` now confirms the current v2 (`schema_version: 2`) standard `.mbnt` bundles the live notary emits — previously it returned `no_file_sha` for all of them. Behavior change on the previously-broken path only; everything else is wire-identical to 0.5.4. Release pending — publishes as `v0.5.5` via `gh release create v0.5.5` (dated on release).
+
+- **`chain_confirm_bundle` reads the v2 byte-exact file sha, not the legacy flat field (Issue C, external tester report — satsignal-cli 0.4.3 / satsignal-mcp 0.5.4).** The handler read the subject file hash from `canonical.subject.document_sha256`, but v2 canonical docs store it at `canonical.subject.proofs.byte_exact.hash`. Every current standard bundle therefore confirmed as `no_file_sha`, even though `verify_file_against_bundle` handled the same bundles correctly — which is what masked it as a behavior quirk rather than a stale-shape assumption.
+  - **Fix:** new `_subject_file_sha()` resolves the v2 `proofs.byte_exact.hash` location first and falls back to the legacy flat `document_sha256`, so old bundles keep confirming. Sealed (`content_canonical` commitment) and manifest (`chunk_merkle` root) bundles still correctly return `no_file_sha` — neither carries a naked, lookup-able file hash.
+  - **Why it slipped through:** the test suite built bundles with the stale `document_sha256` shape. The default test bundle is now the v2 `byte_exact` shape; added a v2 regression test and an explicit legacy-fallback test. Full suite 100 passing.
+  - **Behavior-change framing:** callers confirming current bundles were already broken (always `no_file_sha`); they now confirm correctly — fix-not-break, but it IS a behavior change for anyone who special-cased the spurious `no_file_sha`.
+
 ## 0.5.4
 
 Ships the cluster j + cluster l fixes from the 2026-05-23 LOW sweep. Patch bump — docs + schema-description + classifier additions only; no behavior change in the MCP tool surface. Wire-shape byte-identical to 0.5.3. Released 2026-05-23 (intra-day follow-up to 0.5.3).
