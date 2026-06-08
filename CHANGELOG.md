@@ -2,7 +2,7 @@
 
 ## 0.5.5
 
-Bugfix. `chain_confirm_bundle` now confirms the current v2 (`schema_version: 2`) standard `.mbnt` bundles the live notary emits — previously it returned `no_file_sha` for all of them. Behavior change on the previously-broken path only; everything else is wire-identical to 0.5.4. Release pending — publishes as `v0.5.5` via `gh release create v0.5.5` (dated on release).
+Bugfix. `chain_confirm_bundle` now confirms the current v2 (`schema_version: 2`) standard `.mbnt` bundles the live notary emits — previously it returned `no_file_sha` for all of them. Behavior change on the previously-broken path only; everything else is wire-identical to 0.5.4. Released 2026-06-08.
 
 - **`chain_confirm_bundle` reads the v2 byte-exact file sha, not the legacy flat field (Issue C, external tester report — satsignal-cli 0.4.3 / satsignal-mcp 0.5.4).** The handler read the subject file hash from `canonical.subject.document_sha256`, but v2 canonical docs store it at `canonical.subject.proofs.byte_exact.hash`. Every current standard bundle therefore confirmed as `no_file_sha`, even though `verify_file_against_bundle` handled the same bundles correctly — which is what masked it as a behavior quirk rather than a stale-shape assumption.
   - **Fix:** new `_subject_file_sha()` resolves the v2 `proofs.byte_exact.hash` location first and falls back to the legacy flat `document_sha256`, so old bundles keep confirming. Sealed (`content_canonical` commitment) and manifest (`chunk_merkle` root) bundles still correctly return `no_file_sha` — neither carries a naked, lookup-able file hash.
