@@ -253,10 +253,19 @@ class ChainConfirmBundleTest(unittest.TestCase):
     def _write_bundle(self, manifest: dict, canonical: dict | None = None
                        ) -> None:
         if canonical is None:
-            # Default canonical has the document_sha256 the handler
-            # actually reads (manifest only carries the 40-hex
-            # doc_hash_expected; the 64-hex file sha lives in canonical).
-            canonical = {"subject": {"document_sha256": "a" * 64}}
+            # Default canonical is the v2 (schema_version 2) shape the
+            # live notary emits: the 64-hex file sha lives at
+            # subject.proofs.byte_exact.hash (manifest only carries the
+            # 40-hex doc_hash_expected). The flat document_sha256 form is
+            # pre-v2 and covered separately as a legacy-fallback case.
+            canonical = {
+                "schema_version": 2,
+                "subject": {
+                    "proofs": {
+                        "byte_exact": {"algo": "sha256", "hash": "a" * 64},
+                    },
+                },
+            }
         with zipfile.ZipFile(self.bundle, "w") as zf:
             zf.writestr("manifest.json", json.dumps(manifest))
             zf.writestr("canonical.json", json.dumps(canonical))
@@ -318,11 +327,40 @@ class ChainConfirmBundleTest(unittest.TestCase):
         self.assertEqual(payload["manifest_mode"], "sealed")
         api.lookup_hash.assert_not_called()
 
-    def test_lookup_called_with_canonical_sha_not_manifest_hash(self):
-        """Regression: pre-fix the handler read manifest.doc_hash_expected
-        (40-hex truncated). The real file sha (64-hex) is in
-        canonical.subject.document_sha256, and that's what lookup_hash
-        indexes. Confirm we pass the canonical one."""
+    def test_lookup_uses_v2_byte_exact_hash(self):
+        """Regression for the 0.5.4 no_file_sha bug: v2 bundles store the
+        file sha at canonical.subject.proofs.byte_exact.hash, not the flat
+        document_sha256. Every current standard bundle is schema_version 2,
+        so pre-fix chain_confirm_bundle returned no_file_sha for all of
+        them while verify_file_against_bundle handled them fine. Confirm we
+        read the v2 location and pass that 64-hex sha to lookup_hash."""
+        self._write_bundle(
+            {"txid": "t" * 64, "doc_hash_expected": "ab" * 20},
+            canonical={
+                "schema_version": 2,
+                "subject": {
+                    "proofs": {
+                        "byte_exact": {"algo": "sha256", "hash": "9" * 64},
+                    },
+                },
+            },
+        )
+        api = mock.AsyncMock()
+        api.lookup_hash.return_value = {
+            "bundle_id": "b1", "txid": "t" * 64, "created_utc": "x",
+        }
+        result = _run(_handle_chain_confirm_bundle(
+            {"path": str(self.bundle)}, api,
+        ))
+        self.assertTrue(_parse(result)["verified"])
+        api.lookup_hash.assert_called_once_with("9" * 64)
+
+    def test_lookup_falls_back_to_legacy_document_sha256(self):
+        """Pre-v2 bundles carried the file sha flat at
+        canonical.subject.document_sha256. The handler still reads it as a
+        fallback so old bundles keep chain-confirming. (Pre-fix the handler
+        read manifest.doc_hash_expected, a 40-hex truncated hash; the
+        64-hex file sha lives in canonical and is what lookup_hash indexes.)"""
         self._write_bundle(
             {
                 "txid": "t" * 64,

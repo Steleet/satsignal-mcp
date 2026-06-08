@@ -718,6 +718,37 @@ def _extract_bundle_claims(bundle_path: Path) -> tuple[dict, dict]:
     return manifest, canonical
 
 
+def _subject_file_sha(subject: dict) -> str | None:
+    """Resolve the 64-hex file sha256 from a canonical-doc subject.
+
+    v2 canonical docs (schema_version 2 — what the live notary emits)
+    store the file hash at ``subject.proofs.byte_exact.hash`` (algo
+    sha256). Pre-v2 bundles carried it flat at
+    ``subject.document_sha256``. Try the v2 location first, then fall
+    back to the legacy field. Returns the 64-hex string, or None when
+    neither is present — sealed bundles expose only a
+    ``content_canonical`` commitment and manifest bundles only a
+    ``chunk_merkle`` root, neither of which is a naked, lookup-able
+    file sha.
+
+    (Reading only the legacy field was the 0.5.4 bug: every current
+    standard bundle has schema_version 2, so chain_confirm_bundle
+    returned no_file_sha for bundles that verify_file_against_bundle
+    handled fine.)
+    """
+    proofs = subject.get("proofs")
+    if isinstance(proofs, dict):
+        byte_exact = proofs.get("byte_exact")
+        if isinstance(byte_exact, dict) and byte_exact.get("algo") == "sha256":
+            h = byte_exact.get("hash")
+            if isinstance(h, str) and len(h) == 64:
+                return h
+    legacy = subject.get("document_sha256")
+    if isinstance(legacy, str) and len(legacy) == 64:
+        return legacy
+    return None
+
+
 async def _handle_chain_confirm_bundle(args: dict, api: SatsignalApi
                                        ) -> mtypes.CallToolResult:
     # Accept both `bundle_path` (new canonical name) and `path` (legacy
@@ -753,17 +784,19 @@ async def _handle_chain_confirm_bundle(args: dict, api: SatsignalApi
         return _error_response(f"could not read bundle: {e}",
                                code="bad_bundle")
 
-    # The 64-hex file sha lives in canonical.subject.document_sha256;
-    # /lookup_hash indexes that field. manifest.doc_hash_expected is
-    # a 40-hex truncated hash of the canonical doc embedded on-chain
-    # (the OP_RETURN payload), NOT the file hash — not lookup-able.
+    # The 64-hex file sha is what /lookup_hash indexes. In v2 canonical
+    # docs it lives at canonical.subject.proofs.byte_exact.hash; pre-v2
+    # bundles carried it flat at canonical.subject.document_sha256
+    # (_subject_file_sha resolves both). manifest.doc_hash_expected is a
+    # 40-hex truncated hash of the canonical doc embedded on-chain (the
+    # OP_RETURN payload), NOT the file hash — not lookup-able.
     subject = canonical.get("subject") or {}
-    claimed_sha = subject.get("document_sha256")
-    if not isinstance(claimed_sha, str) or len(claimed_sha) != 64:
+    claimed_sha = _subject_file_sha(subject)
+    if claimed_sha is None:
         return _error_response(
-            "bundle has no document_sha256 in canonical.subject (sealed "
-            "or manifest-mode bundles don't expose a naked file sha; "
-            "chain-confirm via lookup_hash isn't applicable).",
+            "bundle has no byte_exact file sha in canonical.subject "
+            "(sealed or manifest-mode bundles don't expose a naked file "
+            "sha; chain-confirm via lookup_hash isn't applicable).",
             code="no_file_sha",
             manifest_mode=manifest.get("mode"),
         )
