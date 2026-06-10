@@ -11,17 +11,19 @@ Runs on stdio. Configured via env:
                        byte-identical, never removed; SATSIGNAL_FOLDER
                        takes precedence if both are set).
 
-Vocabulary note: the public input name is `folder` (env
-SATSIGNAL_FOLDER). `matter` / SATSIGNAL_MATTER are the frozen legacy
-aliases — still accepted with byte-identical behavior and never
-removed. On the wire to the Satsignal API the body key stays the
-frozen legacy `matter_slug` (accepted by every Satsignal server, incl.
-older / self-hosted); `folder` is folded into `matter_slug` before the
-network call. If both `folder` and `matter` are sent with non-empty
-values that DIFFER, the tool returns a validation error rather than
-silently picking one.
+Vocabulary (decision 0046 — canonical proof/folder names): the public
+input name is `folder` (env SATSIGNAL_FOLDER). `matter` /
+SATSIGNAL_MATTER are the frozen legacy aliases — still accepted with
+byte-identical behavior. On the wire to the Satsignal API the body key
+is the canonical `folder_slug`; tool results use the canonical
+`proof_id` / `folder_slug` / `proof_url` keys. Responses from the API
+are read canonical-first with a legacy-key fallback (bundle_id /
+matter_slug / receipt_url) for older / self-hosted servers. If both
+`folder` and `matter` are sent with non-empty values that DIFFER, the
+tool returns a validation error (conflicting_alias, mirroring the
+server) rather than silently picking one.
 
-Tools (v0.4):
+Tools (v0.6):
   anchor_file                  sha256 a local file, POST to /api/v1/anchors.
   anchor_text                  sha256 a UTF-8 string.
   anchor_json                  Canonicalize JSON (sort_keys), sha256, anchor.
@@ -70,11 +72,11 @@ _SERVER_NAME = "satsignal"
 
 _INSTRUCTIONS = (
     "Satsignal anchors a sha256 of your input to the BSV blockchain, "
-    "returning a receipt that proves the anchorer held this exact "
+    "returning a proof that the anchorer held this exact "
     "input by a specific time (tamper-evidence and timing — not "
     "authorship, and not that the input existed before the anchor). "
-    "Use anchor_file / anchor_text / anchor_json to create a receipt. "
-    "To check a receipt, use verify_file_against_bundle when you have "
+    "Use anchor_file / anchor_text / anchor_json to create a proof. "
+    "To check a proof, use verify_file_against_bundle when you have "
     "the original file in hand (full verify: detects tampering) — or "
     "chain_confirm_bundle for a fast chain-only check when the file "
     "isn't available. lookup_hash is a raw sha → txid index lookup. "
@@ -165,23 +167,23 @@ def _tool_definitions() -> list[mtypes.Tool]:
         "description": (
             "Folder slug within the workspace. Defaults to the "
             "SATSIGNAL_FOLDER env var (legacy SATSIGNAL_MATTER still "
-            "honored) or 'inbox'. Sent to the API as the frozen "
-            "`matter_slug` wire field for backward compatibility."
+            "honored) or 'inbox'. Sent to the API as the canonical "
+            "`folder_slug` wire field."
         ),
     }
     matter_field = {
         "type": "string",
         "description": (
-            "Legacy alias of `folder` (frozen; still accepted, never "
-            "removed). Prefer `folder`. Sending both `folder` and "
-            "`matter` with different non-empty values is an error; "
-            "equal values are accepted."
+            "Legacy alias of `folder`; still accepted. Prefer "
+            "`folder`. Sending both with different non-empty values "
+            "is an error (conflicting_alias); equal values are "
+            "accepted."
         ),
     }
     label_field = {
         "type": "string",
         "description": (
-            "Optional short label shown on the receipt. "
+            "Optional short label shown on the proof. "
             "Attacker-controllable; treat as untrusted display text."
         ),
     }
@@ -198,7 +200,7 @@ def _tool_definitions() -> list[mtypes.Tool]:
         "default": False,
         "description": (
             "By default the API dedups: re-anchoring the same "
-            "sha256_hex in the same folder returns the prior receipt "
+            "sha256_hex in the same folder returns the prior proof "
             "without broadcasting. force_new=true opts out — useful "
             "for refreshing the chain timestamp."
         ),
@@ -208,7 +210,7 @@ def _tool_definitions() -> list[mtypes.Tool]:
             name="anchor_file",
             description=(
                 "Anchor a local file: compute its sha256, POST to "
-                "Satsignal, return the receipt. The file's bytes never "
+                "Satsignal, return the proof. The file's bytes never "
                 "leave this machine; only the hash is sent."
             ),
             inputSchema={
@@ -255,7 +257,7 @@ def _tool_definitions() -> list[mtypes.Tool]:
                 "Canonicalize a JSON object (sorted keys, compact "
                 "separators, UTF-8), sha256 the bytes, and anchor. The "
                 "canonical bytes are returned in the response so the "
-                "caller can save them alongside the receipt — "
+                "caller can save them alongside the proof — "
                 "verification later requires reproducing the same bytes."
             ),
             inputSchema={
@@ -302,7 +304,7 @@ def _tool_definitions() -> list[mtypes.Tool]:
             name="lookup_hash",
             description=(
                 "Check whether a sha256 is anchored on-chain. Read-only, "
-                "no auth required. Returns {hit, bundle_id, txid, "
+                "no auth required. Returns {hit, proof_id, txid, "
                 "created_utc} on hit, {hit:false, reason} on miss."
             ),
             inputSchema={
@@ -460,17 +462,20 @@ def _error_response(message: str, *, code: str = "error",
     )
 
 
-def _anchor_result_payload(*, sha: str, matter: str, label: str | None,
+def _anchor_result_payload(*, sha: str, folder: str, label: str | None,
                             file_size: int | None,
                             anchor) -> dict:
+    # Canonical output vocabulary (decision 0046): proof_id /
+    # folder_slug / proof_url. The legacy bundle_id / matter_slug /
+    # receipt_url output keys are gone as of 0.6.0.
     return {
         "anchored": True,
         "sha256_hex": sha,
-        "bundle_id": anchor.bundle_id,
+        "proof_id": anchor.proof_id,
         "txid": anchor.txid,
         "mode": anchor.mode,
-        "matter_slug": anchor.matter_slug,
-        "receipt_url": anchor.receipt_url,
+        "folder_slug": anchor.folder_slug,
+        "proof_url": anchor.proof_url,
         "bundle_url": anchor.bundle_url,
         "duplicate": anchor.duplicate,
         **({"label": label} if label else {}),
@@ -505,10 +510,6 @@ async def _handle_anchor_file(args: dict, api: SatsignalApi
         folder = _resolve_folder(args)
     except FolderAliasConflict as e:
         return _error_response(str(e), code="conflicting_alias")
-    # `folder` is the resolved slug; it is sent to the API as the
-    # frozen `matter_slug` wire field. Local name kept as `matter`
-    # so downstream payload/api call are byte-identical to before.
-    matter = folder
     label = args.get("label") or None
     dry_run = bool(args.get("dry_run", False))
     force_new = bool(args.get("force_new", False))
@@ -520,7 +521,7 @@ async def _handle_anchor_file(args: dict, api: SatsignalApi
             "sha256_hex": sha,
             "file_size": size,
             "filename": path.name,
-            "matter_slug": matter,
+            "folder_slug": folder,
             **({"label": label} if label else {}),
             "note": (
                 "Dry run only. Pass dry_run=false (or omit) to broadcast."
@@ -529,7 +530,7 @@ async def _handle_anchor_file(args: dict, api: SatsignalApi
 
     try:
         anchor = await api.anchor_standard(
-            matter_slug=matter,
+            folder_slug=folder,
             sha256_hex=sha,
             file_size=size,
             label=label,
@@ -540,7 +541,7 @@ async def _handle_anchor_file(args: dict, api: SatsignalApi
         return _error_response(e.message or str(e), code=e.code,
                                status=e.status, body=e.body)
     return _text_response(_anchor_result_payload(
-        sha=sha, matter=matter, label=label, file_size=size, anchor=anchor,
+        sha=sha, folder=folder, label=label, file_size=size, anchor=anchor,
     ))
 
 
@@ -556,7 +557,6 @@ async def _handle_anchor_text(args: dict, api: SatsignalApi
         folder = _resolve_folder(args)
     except FolderAliasConflict as e:
         return _error_response(str(e), code="conflicting_alias")
-    matter = folder
     label = args.get("label") or None
     dry_run = bool(args.get("dry_run", False))
     force_new = bool(args.get("force_new", False))
@@ -567,7 +567,7 @@ async def _handle_anchor_text(args: dict, api: SatsignalApi
             "dry_run": True,
             "sha256_hex": sha,
             "byte_length": size,
-            "matter_slug": matter,
+            "folder_slug": folder,
             **({"label": label} if label else {}),
             "note": (
                 "Dry run only. The sha256 covers exactly "
@@ -577,7 +577,7 @@ async def _handle_anchor_text(args: dict, api: SatsignalApi
 
     try:
         anchor = await api.anchor_standard(
-            matter_slug=matter,
+            folder_slug=folder,
             sha256_hex=sha,
             file_size=size,
             label=label,
@@ -587,7 +587,7 @@ async def _handle_anchor_text(args: dict, api: SatsignalApi
         return _error_response(e.message or str(e), code=e.code,
                                status=e.status, body=e.body)
     return _text_response(_anchor_result_payload(
-        sha=sha, matter=matter, label=label, file_size=size, anchor=anchor,
+        sha=sha, folder=folder, label=label, file_size=size, anchor=anchor,
     ))
 
 
@@ -635,7 +635,6 @@ async def _handle_anchor_json(args: dict, api: SatsignalApi
         folder = _resolve_folder(args)
     except FolderAliasConflict as e:
         return _error_response(str(e), code="conflicting_alias")
-    matter = folder
     label = args.get("label") or None
     dry_run = bool(args.get("dry_run", False))
     force_new = bool(args.get("force_new", False))
@@ -648,18 +647,18 @@ async def _handle_anchor_json(args: dict, api: SatsignalApi
             "sha256_hex": sha,
             "byte_length": size,
             "canonical_bytes": canonical_str,
-            "matter_slug": matter,
+            "folder_slug": folder,
             **({"label": label} if label else {}),
             "note": (
                 "Dry run only. Save the canonical_bytes alongside the "
-                "future receipt — verification requires reproducing "
+                "future proof — verification requires reproducing "
                 "these exact bytes."
             ),
         })
 
     try:
         anchor = await api.anchor_standard(
-            matter_slug=matter,
+            folder_slug=folder,
             sha256_hex=sha,
             file_size=size,
             label=label,
@@ -669,7 +668,7 @@ async def _handle_anchor_json(args: dict, api: SatsignalApi
         return _error_response(e.message or str(e), code=e.code,
                                status=e.status, body=e.body)
     payload = _anchor_result_payload(
-        sha=sha, matter=matter, label=label, file_size=size, anchor=anchor,
+        sha=sha, folder=folder, label=label, file_size=size, anchor=anchor,
     )
     payload["canonical_bytes"] = canonical_str
     return _text_response(payload)
@@ -695,7 +694,9 @@ async def _handle_lookup_hash(args: dict, api: SatsignalApi
     return _text_response({
         "hit": True,
         "sha256_hex": sha.lower().strip(),
-        "bundle_id": result.get("bundle_id"),
+        # Canonical key first; legacy bundle_id fallback covers older /
+        # self-hosted servers (and proof.* mirror-mode lags).
+        "proof_id": result.get("proof_id") or result.get("bundle_id"),
         "txid": result.get("txid"),
         "created_utc": result.get("created_utc"),
     })
@@ -826,7 +827,8 @@ async def _handle_chain_confirm_bundle(args: dict, api: SatsignalApi
         "claimed_sha256_hex": claimed_sha,
         "claimed_txid": claimed_txid,
         "indexed_txid": indexed_txid,
-        "bundle_id": result.get("bundle_id"),
+        # Canonical-first read with legacy fallback (older servers).
+        "proof_id": result.get("proof_id") or result.get("bundle_id"),
         "created_utc": result.get("created_utc"),
         **({"reason": "txid_mismatch"} if claimed_txid and not txid_matches
            else {}),

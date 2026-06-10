@@ -50,14 +50,14 @@ def _parse(response) -> dict:
     return json.loads(content[0].text)
 
 
-def _stub_anchor_result(*, sha: str, matter: str = "inbox",
+def _stub_anchor_result(*, sha: str, folder: str = "inbox",
                         duplicate: bool = False) -> AnchorResult:
     return AnchorResult(
-        bundle_id="bundle_test_001",
+        proof_id="bundle_test_001",
         txid="t" * 64,
         mode="standard",
-        matter_slug=matter,
-        receipt_url=f"https://example.com/w/ws/m/{matter}/r/bundle_test_001",
+        folder_slug=folder,
+        proof_url=f"https://example.com/w/ws/m/{folder}/r/bundle_test_001",
         bundle_url="https://example.com/bundle/bundle_test_001.mbnt",
         duplicate=duplicate,
         raw={},
@@ -100,9 +100,13 @@ class AnchorFileDryRunTest(unittest.TestCase):
         payload = _parse(result)
         self.assertTrue(payload["anchored"])
         self.assertEqual(payload["sha256_hex"], self.expected_sha)
-        self.assertEqual(payload["bundle_id"], "bundle_test_001")
+        self.assertEqual(payload["proof_id"], "bundle_test_001")
+        # Legacy output keys are gone as of 0.6.0.
+        self.assertNotIn("bundle_id", payload)
+        self.assertNotIn("matter_slug", payload)
+        self.assertNotIn("receipt_url", payload)
         api.anchor_standard.assert_called_once_with(
-            matter_slug="case42",
+            folder_slug="case42",
             sha256_hex=self.expected_sha,
             file_size=11,
             label="evidence A",
@@ -209,7 +213,7 @@ class LookupHashTest(unittest.TestCase):
     def test_hit_maps_to_hit_true(self):
         api = mock.AsyncMock()
         api.lookup_hash.return_value = {
-            "bundle_id": "b1", "txid": "t" * 64,
+            "proof_id": "b1", "txid": "t" * 64,
             "created_utc": "2026-05-14T00:00:00Z",
         }
         result = _run(_handle_lookup_hash(
@@ -217,8 +221,26 @@ class LookupHashTest(unittest.TestCase):
         ))
         payload = _parse(result)
         self.assertTrue(payload["hit"])
-        self.assertEqual(payload["bundle_id"], "b1")
+        self.assertEqual(payload["proof_id"], "b1")
         self.assertEqual(payload["txid"], "t" * 64)
+        self.assertNotIn("bundle_id", payload)
+
+    def test_hit_reads_legacy_bundle_id_fallback(self):
+        """Older / self-hosted servers still emit the legacy
+        `bundle_id` response key; the tool reads it as a fallback and
+        re-emits it under the canonical `proof_id` output key."""
+        api = mock.AsyncMock()
+        api.lookup_hash.return_value = {
+            "bundle_id": "b-legacy", "txid": "t" * 64,
+            "created_utc": "2026-05-14T00:00:00Z",
+        }
+        result = _run(_handle_lookup_hash(
+            {"sha256_hex": "a" * 64}, api,
+        ))
+        payload = _parse(result)
+        self.assertTrue(payload["hit"])
+        self.assertEqual(payload["proof_id"], "b-legacy")
+        self.assertNotIn("bundle_id", payload)
 
     def test_miss_maps_to_hit_false(self):
         api = mock.AsyncMock()
@@ -274,13 +296,15 @@ class ChainConfirmBundleTest(unittest.TestCase):
         self._write_bundle({"txid": "t" * 64})
         api = mock.AsyncMock()
         api.lookup_hash.return_value = {
-            "bundle_id": "b1", "txid": "t" * 64, "created_utc": "x",
+            "proof_id": "b1", "txid": "t" * 64, "created_utc": "x",
         }
         result = _run(_handle_chain_confirm_bundle(
             {"path": str(self.bundle)}, api,
         ))
         payload = _parse(result)
         self.assertTrue(payload["verified"])
+        self.assertEqual(payload["proof_id"], "b1")
+        self.assertNotIn("bundle_id", payload)
 
     def test_verified_false_on_txid_mismatch(self):
         """Locally-fabricated bundle: real sha in canonical but bogus
@@ -289,7 +313,7 @@ class ChainConfirmBundleTest(unittest.TestCase):
         self._write_bundle({"txid": "f" * 64})  # forged
         api = mock.AsyncMock()
         api.lookup_hash.return_value = {
-            "bundle_id": "b1", "txid": "t" * 64,  # real
+            "proof_id": "b1", "txid": "t" * 64,  # real
             "created_utc": "x",
         }
         result = _run(_handle_chain_confirm_bundle(
@@ -347,7 +371,7 @@ class ChainConfirmBundleTest(unittest.TestCase):
         )
         api = mock.AsyncMock()
         api.lookup_hash.return_value = {
-            "bundle_id": "b1", "txid": "t" * 64, "created_utc": "x",
+            "proof_id": "b1", "txid": "t" * 64, "created_utc": "x",
         }
         result = _run(_handle_chain_confirm_bundle(
             {"path": str(self.bundle)}, api,
@@ -370,7 +394,7 @@ class ChainConfirmBundleTest(unittest.TestCase):
         )
         api = mock.AsyncMock()
         api.lookup_hash.return_value = {
-            "bundle_id": "b1", "txid": "t" * 64, "created_utc": "x",
+            "proof_id": "b1", "txid": "t" * 64, "created_utc": "x",
         }
         _run(_handle_chain_confirm_bundle(
             {"path": str(self.bundle)}, api,
@@ -596,8 +620,9 @@ class FolderEnvDefaultTest(unittest.TestCase):
 
 class AnchorHandlerAliasWireTest(unittest.TestCase):
     """End-to-end through the anchor handlers: confirm the resolved
-    folder is sent to the API as the FROZEN `matter_slug` wire kwarg
-    (never `folder_slug`), legacy `matter` still works, and conflicts
+    folder is sent to the API as the CANONICAL `folder_slug` wire kwarg
+    (never the legacy `matter_slug` — decision 0046 vocabulary sunset),
+    legacy `matter` input still works as a silent alias, and conflicts
     short-circuit before any network call."""
 
     def setUp(self):
@@ -621,24 +646,27 @@ class AnchorHandlerAliasWireTest(unittest.TestCase):
         api.anchor_standard.return_value = _stub_anchor_result(sha=self.sha)
         return api
 
-    def test_legacy_matter_arg_sends_matter_slug_unchanged(self):
+    def test_legacy_matter_arg_sends_canonical_folder_slug(self):
+        """The legacy `matter` INPUT is still accepted, but on the wire
+        it travels as the canonical `folder_slug` kwarg — the legacy
+        `matter_slug` wire key is never sent (decision 0046)."""
         api = self._api()
         _run(_handle_anchor_file(
             {"path": str(self.path), "matter": "case-legacy"}, api,
         ))
         kwargs = api.anchor_standard.call_args.kwargs
-        self.assertEqual(kwargs["matter_slug"], "case-legacy")
-        self.assertNotIn("folder_slug", kwargs)
-        self.assertNotIn("folder", kwargs)
+        self.assertEqual(kwargs["folder_slug"], "case-legacy")
+        self.assertNotIn("matter_slug", kwargs)
+        self.assertNotIn("matter", kwargs)
 
-    def test_new_folder_arg_folds_into_matter_slug_wire_field(self):
+    def test_folder_arg_sends_folder_slug_wire_field(self):
         api = self._api()
         _run(_handle_anchor_text(
             {"text": "hi", "folder": "proj-x"}, api,
         ))
         kwargs = api.anchor_standard.call_args.kwargs
-        self.assertEqual(kwargs["matter_slug"], "proj-x")
-        self.assertNotIn("folder_slug", kwargs)
+        self.assertEqual(kwargs["folder_slug"], "proj-x")
+        self.assertNotIn("matter_slug", kwargs)
 
     def test_folder_preferred_over_matter_on_wire(self):
         api = self._api()
@@ -646,7 +674,7 @@ class AnchorHandlerAliasWireTest(unittest.TestCase):
             {"data": {"k": 1}, "folder": "f", "matter": ""}, api,
         ))
         kwargs = api.anchor_standard.call_args.kwargs
-        self.assertEqual(kwargs["matter_slug"], "f")
+        self.assertEqual(kwargs["folder_slug"], "f")
 
     def test_conflict_returns_error_and_no_api_call(self):
         api = self._api()
@@ -671,26 +699,28 @@ class AnchorHandlerAliasWireTest(unittest.TestCase):
             self.assertEqual(payload["error"], "conflicting_alias")
             api.anchor_standard.assert_not_called()
 
-    def test_legacy_matter_dry_run_payload_unchanged(self):
-        """Regression guard: dry-run still reports `matter_slug` and the
-        legacy `matter` arg drives it byte-identically."""
+    def test_legacy_matter_dry_run_reports_canonical_folder_slug(self):
+        """The legacy `matter` arg still drives the dry-run, but the
+        payload reports the canonical `folder_slug` key (the legacy
+        `matter_slug` output key is gone as of 0.6.0)."""
         api = mock.AsyncMock()
         result = _run(_handle_anchor_file(
             {"path": str(self.path), "matter": "case42", "dry_run": True},
             api,
         ))
         payload = _parse(result)
-        self.assertEqual(payload["matter_slug"], "case42")
+        self.assertEqual(payload["folder_slug"], "case42")
+        self.assertNotIn("matter_slug", payload)
         api.anchor_standard.assert_not_called()
 
-    def test_folder_drives_dry_run_matter_slug(self):
+    def test_folder_drives_dry_run_folder_slug(self):
         api = mock.AsyncMock()
         result = _run(_handle_anchor_file(
             {"path": str(self.path), "folder": "case42", "dry_run": True},
             api,
         ))
         payload = _parse(result)
-        self.assertEqual(payload["matter_slug"], "case42")
+        self.assertEqual(payload["folder_slug"], "case42")
         api.anchor_standard.assert_not_called()
 
 
@@ -717,7 +747,7 @@ class ChainConfirmBundleAliasTest(unittest.TestCase):
     def _api(self):
         api = mock.AsyncMock()
         api.lookup_hash.return_value = {
-            "bundle_id": "b1", "txid": "t" * 64, "created_utc": "x",
+            "proof_id": "b1", "txid": "t" * 64, "created_utc": "x",
         }
         return api
 
@@ -961,7 +991,7 @@ class CallToolResultShapeTest(unittest.TestCase):
         import mcp.types as mtypes
         api = mock.AsyncMock()
         api.lookup_hash.return_value = {
-            "bundle_id": "b1", "txid": "t" * 64,
+            "proof_id": "b1", "txid": "t" * 64,
             "created_utc": "2026-05-22T00:00:00Z",
         }
         result = _run(_handle_lookup_hash(
@@ -1023,6 +1053,77 @@ class CallToolResultShapeTest(unittest.TestCase):
         result = _error_response("test", code="unknown_tool")
         self.assertIsInstance(result, mtypes.CallToolResult)
         self.assertTrue(result.isError)
+
+
+class ApiWireVocabularyTest(unittest.TestCase):
+    """Pin the HTTP-level vocabulary contract (decision 0046): the
+    anchor request body carries the canonical `folder_slug` key (never
+    the legacy `matter_slug`), and the response is parsed
+    canonical-first with a legacy-key fallback for older / self-hosted
+    servers."""
+
+    def _api_with_response(self, response_json: dict):
+        from satsignal_mcp.api import SatsignalApi
+        api = SatsignalApi(api_base="https://app.example", api_key="sk_test")
+        resp = mock.Mock()
+        resp.status_code = 200
+        resp.json.return_value = response_json
+        api._client = mock.AsyncMock()
+        api._client.post.return_value = resp
+        return api
+
+    def test_request_body_sends_canonical_folder_slug(self):
+        api = self._api_with_response({
+            "proof_id": "p1", "txid": "t" * 64,
+            "folder_slug": "case42", "proof_url": "https://x/p/p1",
+        })
+        _run(api.anchor_standard(folder_slug="case42", sha256_hex="a" * 64))
+        body = api._client.post.call_args.kwargs["json"]
+        self.assertEqual(body["folder_slug"], "case42")
+        self.assertNotIn("matter_slug", body)
+
+    def test_canonical_response_keys_parsed(self):
+        api = self._api_with_response({
+            "proof_id": "p1", "txid": "t" * 64, "mode": "standard",
+            "folder_slug": "case42", "proof_url": "https://x/p/p1",
+            "bundle_url": "https://x/b/p1.mbnt", "duplicate": False,
+        })
+        result = _run(api.anchor_standard(
+            folder_slug="case42", sha256_hex="a" * 64,
+        ))
+        self.assertEqual(result.proof_id, "p1")
+        self.assertEqual(result.folder_slug, "case42")
+        self.assertEqual(result.proof_url, "https://x/p/p1")
+
+    def test_legacy_response_keys_read_as_fallback(self):
+        """Older / self-hosted servers still emit bundle_id /
+        matter_slug / receipt_url; the parser falls back to them when
+        the canonical keys are absent."""
+        api = self._api_with_response({
+            "bundle_id": "b-legacy", "txid": "t" * 64,
+            "matter_slug": "case42",
+            "receipt_url": "https://x/r/b-legacy",
+        })
+        result = _run(api.anchor_standard(
+            folder_slug="case42", sha256_hex="a" * 64,
+        ))
+        self.assertEqual(result.proof_id, "b-legacy")
+        self.assertEqual(result.folder_slug, "case42")
+        self.assertEqual(result.proof_url, "https://x/r/b-legacy")
+
+    def test_canonical_wins_over_legacy_when_both_present(self):
+        api = self._api_with_response({
+            "proof_id": "p-canon", "bundle_id": "b-legacy",
+            "proof_url": "https://x/p/p-canon",
+            "receipt_url": "https://x/r/b-legacy",
+            "folder_slug": "f-canon", "matter_slug": "m-legacy",
+        })
+        result = _run(api.anchor_standard(
+            folder_slug="f-canon", sha256_hex="a" * 64,
+        ))
+        self.assertEqual(result.proof_id, "p-canon")
+        self.assertEqual(result.folder_slug, "f-canon")
+        self.assertEqual(result.proof_url, "https://x/p/p-canon")
 
 
 if __name__ == "__main__":

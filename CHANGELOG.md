@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0
+
+Canonical proof/folder vocabulary flip (decision 0046 — vocabulary sunset). The Satsignal API's 2xx responses now emit canonical keys only (`proof_id`, `proof_url`, `folder_slug`; legacy `bundle_id` / `receipt_url` / `matter_*` are gone from responses), and tooling is required to *send* canonical keys. This release aligns satsignal-mcp end-to-end. Released 2026-06-09.
+
+- **Requests send the canonical `folder_slug` wire key** (was the frozen legacy `matter_slug`). The live server still accepts `matter_slug` as a silent alias, but per the sunset policy tooling sends canonical. `SatsignalApi.anchor_standard`'s kwarg is renamed `matter_slug` → `folder_slug` accordingly.
+- **Tool results use canonical keys.** Anchor tools now report `proof_id`, `folder_slug`, `proof_url` (dry-run payloads report `folder_slug`); `lookup_hash` and `chain_confirm_bundle` report `proof_id`. The legacy output keys `bundle_id`, `matter_slug`, `receipt_url` are **removed from tool output** — this is the breaking part of the minor bump; consumers reading those keys must switch to the canonical names. `AnchorResult`'s fields are renamed to match (`proof_id` / `folder_slug` / `proof_url`).
+- **Responses are parsed canonical-first with a legacy fallback.** Because earlier releases documented compatibility with older / self-hosted Satsignal servers, the response parser still falls back to `bundle_id` / `matter_slug` / `receipt_url` when the canonical keys are absent, and re-emits the value under the canonical output name. Note the asymmetry: a server too old to *accept* `folder_slug` in requests can no longer be anchored against from this release — use ≤ 0.5.x for that; read-only paths (`lookup_hash`, `chain_confirm_bundle`) keep working against either vintage.
+- **Input alias policy unchanged** (and now the documented-canonical-only shape): `folder` is the primary documented input on every `anchor_*` tool; the legacy `matter` input remains a silent alias. Sending both with different non-empty values is still rejected with `conflicting_alias`, mirroring the server; equal values are accepted. `SATSIGNAL_FOLDER` / legacy `SATSIGNAL_MATTER` env defaults are unchanged.
+- **Docs use canonical vocabulary** ("proof", `folder_slug`) with a single legacy-compat note each in README and the tool schemas; tool descriptions no longer teach the legacy names.
+- `User-Agent` now derives from package metadata (`satsignal-mcp/<version>`) instead of a hard-coded string that had been frozen at `0.2.1` since that release.
+
 ## 0.5.5
 
 Bugfix. `chain_confirm_bundle` now confirms the current v2 (`schema_version: 2`) standard `.mbnt` bundles the live notary emits — previously it returned `no_file_sha` for all of them. Behavior change on the previously-broken path only; everything else is wire-identical to 0.5.4. Released 2026-06-08.
