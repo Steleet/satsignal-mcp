@@ -10,7 +10,7 @@ speak MCP over stdio) can call Satsignal directly — no custom SDK required.
 Each anchor call computes a sha256 of the input client-side and sends only
 the hash to `proof.satsignal.cloud`. The file/text/JSON bytes never leave
 the calling machine. The server records the hash on the BSV blockchain
-and returns a receipt the agent can save or pass on.
+and returns a proof the agent can save or pass on.
 
 ## Tools
 
@@ -32,16 +32,14 @@ call.
 ### Folder selection
 
 Each `anchor_*` tool accepts a `folder` property naming the workspace
-folder the receipt lands in (defaults to `SATSIGNAL_FOLDER`, then the
-legacy `SATSIGNAL_MATTER`, then `inbox`).
+folder the proof lands in (defaults to `SATSIGNAL_FOLDER`, then the
+legacy `SATSIGNAL_MATTER`, then `inbox`). The request sent to the
+Satsignal API uses the canonical `folder_slug` wire field.
 
-> **Legacy compat:** the old input name `matter` is a frozen alias of
-> `folder` — still accepted with byte-identical behavior and never
-> removed. Sending both `folder` and `matter` with different non-empty
-> values is rejected (`conflicting_alias`); equal values are
-> accepted. The request sent to the Satsignal API still uses the frozen
-> `matter_slug` wire field, so this MCP server keeps working against
-> current and older / self-hosted Satsignal servers.
+> **Legacy compat:** the old input name `matter` is still accepted as a
+> silent alias of `folder`. Sending both with different non-empty
+> values is rejected (`conflicting_alias`, mirroring the server); equal
+> values are accepted.
 
 ## Configuration
 
@@ -130,14 +128,22 @@ shell environment.
 
 ## Verification model
 
-Each anchor returns `bundle_id`, `txid`, and `receipt_url` (the legacy
-wire names, kept stable for back-compat — every Satsignal server,
-including older / self-hosted deployments, accepts and emits these
-exact keys). The same artifacts are what `proof.satsignal.cloud`'s
-public surfaces call a "proof" — the rename lives in the
-marketing/UI layer, not in the API response. The proof is independent
-of Satsignal: anyone can fetch the bundle, verify the on-chain
-transaction directly against BSV, and check the sha256 matches.
+Each anchor returns `proof_id`, `txid`, and `proof_url` — the
+canonical vocabulary the Satsignal API itself now emits. The proof is
+independent of Satsignal: anyone can fetch the bundle, verify the
+on-chain transaction directly against BSV, and check the sha256
+matches.
+
+> **Compatibility note (0.6.0, vocabulary sunset):** this server sends
+> the canonical request key (`folder_slug`) and reports canonical
+> result keys (`proof_id` / `folder_slug` / `proof_url`); the legacy
+> `bundle_id` / `matter_slug` / `receipt_url` keys are gone from tool
+> output. Legacy *inputs* (`matter`, `SATSIGNAL_MATTER`) remain
+> accepted as silent aliases. When talking to an older / self-hosted
+> Satsignal server that still emits the legacy response keys, this
+> server reads them as a fallback and re-emits them under the
+> canonical names — but anchoring against a server too old to accept
+> `folder_slug` requires satsignal-mcp ≤ 0.5.x.
 
 This server exposes two verify tools with different trust assumptions —
 pick the one that matches what you have on hand:
@@ -166,9 +172,9 @@ remains listed so callers pinned by name get the redirect rather than
 
 ## Security notes
 
-- The `label`, `filename`, and `folder` (sent on the wire as the frozen
-  `matter_slug`) fields you pass are written
-  into the receipt and rendered on the public verifier page. They are
+- The `label`, `filename`, and `folder` (sent on the wire as the
+  canonical `folder_slug`) fields you pass are written
+  into the proof and rendered on the public verifier page. They are
   also attacker-controllable from any agent calling this server —
   downstream code that reads these fields should treat them as untrusted
   text (HTML-escape, never embed in LLM context without an isolation

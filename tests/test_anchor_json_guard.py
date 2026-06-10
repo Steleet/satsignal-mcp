@@ -33,13 +33,13 @@ def _parse(response) -> dict:
     return json.loads(content[0].text)
 
 
-def _stub_anchor_result(*, sha: str, matter: str = "inbox") -> AnchorResult:
+def _stub_anchor_result(*, sha: str, folder: str = "inbox") -> AnchorResult:
     return AnchorResult(
-        bundle_id="bundle_test_001",
+        proof_id="bundle_test_001",
         txid="t" * 64,
         mode="standard",
-        matter_slug=matter,
-        receipt_url=f"https://example.com/w/ws/m/{matter}/r/bundle_test_001",
+        folder_slug=folder,
+        proof_url=f"https://example.com/w/ws/m/{folder}/r/bundle_test_001",
         bundle_url="https://example.com/bundle/bundle_test_001.mbnt",
         duplicate=False,
         raw={},
