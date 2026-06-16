@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "description": "Vendored Satsignal disclosure-builder snapshot. Do not edit; see VENDOR.md."
+}

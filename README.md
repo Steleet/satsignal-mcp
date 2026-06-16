@@ -23,6 +23,11 @@ and returns a proof the agent can save or pass on.
 | `verify_file_against_bundle` | no  | **full verify** — re-hash the original file, confirm it matches the bundle, chain-confirm via public block explorers. Detects file tampering. |
 | `chain_confirm_bundle`       | no  | chain-confirm only — open a local `.mbnt`, extract sha+txid, confirm via `lookup_hash`. Fast, but does NOT detect file tampering. |
 | `verify_bundle`              | no  | _deprecated + fail-closed_ (v0.4) — returns `deprecated_tool_blocked` error directing to `verify_file_against_bundle` or `chain_confirm_bundle`. Removable in 0.5. |
+| `anchor_disclosable`         | yes ◇ | anchor a SEALED, selectively-disclosable envelope (`.txt`→text-tree-v1, `.json`→json-ast-v1); optional one-shot `reveal` |
+| `create_disclosure`          | no ◇  | redact an already-anchored source `.mbnt` to reveal a chosen subset (local-only — no network, no quota) |
+| `verify_disclosure`          | no ◇  | verify a disclosure cryptographically binds to its committed Merkle root |
+
+◇ The three disclosable-\* tools require **Node ≥ 18** on `PATH` (or `SATSIGNAL_NODE`) — see [Selective disclosure](#selective-disclosure-sealed-node-backed).
 
 `anchor_*` tools accept `dry_run: true` to preview the sha256 without
 broadcasting. The Satsignal API itself does **not** honor `dry_run` —
@@ -41,6 +46,39 @@ Satsignal API uses the canonical `folder_slug` wire field.
 > values is rejected (`conflicting_alias`, mirroring the server); equal
 > values are accepted.
 
+### Selective disclosure (sealed, node-backed)
+
+`anchor_disclosable` anchors a payload as a **sealed, per-leaf-committed**
+envelope (a `.txt` → text-tree-v1, a `.json` → json-ast-v1) under one Merkle
+root. You can then reveal *any subset* of leaves and the redacted view still
+verifies against the same on-chain commitment:
+
+1. **`anchor_disclosable`** seals the payload and writes a source `.mbnt`.
+   Hashing + the envelope build happen locally; only the root is broadcast and
+   the master salt is never returned. `storage: "mirror"` (default) keeps the
+   salt inside the source `.mbnt` so you can redact later from the bundle alone;
+   `storage: "blind"` keeps it off the bundle. Pass `reveal` / `reveal_names`
+   to emit a one-shot disclosure in the same call (requires `mirror`).
+2. **`create_disclosure`** redacts an already-anchored source `.mbnt` for a
+   specific audience — reveal a subset (0-based indices, or json-ast RFC-6901
+   pointers / text-tree slash paths), seal the rest. Local-only: no network, no
+   quota. Run with `list_only: true` first to see the selectors.
+3. **`verify_disclosure`** confirms a `.disclosure.mbnt` cryptographically binds
+   to the committed root. `verified: false` is a *successful* result, not an
+   error. On-chain existence is surfaced via `linked_txid` + `root` for
+   confirmation on a BSV explorer (`lookup_hash` does not index sealed anchors).
+
+A disclosure proves the revealed fields are authentic to the sealed commitment
+and the sealed fields are provably present-but-hidden — **not** authorship, that
+the content pre-existed the anchor, or that the content is true.
+
+> **Node prerequisite.** These three tools shell out to a vendored snapshot of
+> Satsignal's JS disclosure-builder (one source of truth for the leaf / JCS /
+> Merkle / salt crypto, so the result is byte-identical to the on-chain anchor).
+> They require **Node ≥ 18** on `PATH`, or set `SATSIGNAL_NODE` to a node
+> binary. If node is absent the tools fail closed with `node_unavailable`; the
+> other seven tools are pure-Python and unaffected.
+
 ## Configuration
 
 | Env var | Required | Default |
@@ -49,6 +87,7 @@ Satsignal API uses the canonical `folder_slug` wire field.
 | `SATSIGNAL_API_BASE` | no | `https://app.satsignal.cloud` |
 | `SATSIGNAL_FOLDER`   | no | `inbox` |
 | `SATSIGNAL_MATTER`   | no | legacy alias of `SATSIGNAL_FOLDER` (still honored; `SATSIGNAL_FOLDER` wins if both set) |
+| `SATSIGNAL_NODE`     | no | node binary for the disclosable-\* tools (defaults to `node` on `PATH`; node ≥ 18 required only for those three tools) |
 
 Get an API key at <https://app.satsignal.cloud>. The customer API
 (`POST /api/v1/anchors`, bundle download, dashboard) lives on
@@ -64,6 +103,13 @@ Requires Python 3.10 or newer.
 ```bash
 pip install satsignal-mcp
 ```
+
+The seven core anchor/verify/lookup tools are pure-Python. The three
+disclosable-\* tools (`anchor_disclosable`, `create_disclosure`,
+`verify_disclosure`) additionally require **Node ≥ 18** on `PATH` (or set
+`SATSIGNAL_NODE`) — they shell out to a vendored JS builder. `pip`/`pipx`
+cannot install Node; if it is absent those three tools fail closed with
+`node_unavailable` and the rest are unaffected.
 
 ## Inspecting tool schemas
 

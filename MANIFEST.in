@@ -1,0 +1,6 @@
+# Ship the vendored JS disclosure-builder snapshot (data files, not importable
+# Python) in the sdist as well as the wheel. The wheel picks these up via
+# [tool.setuptools.package-data] in pyproject.toml; this MANIFEST covers the
+# sdist. Keep the two in sync. See vendor/disclosure_builder/VENDOR.md.
+recursive-include src/satsignal_mcp/vendor/disclosure_builder *.mjs *.json *.md
+include src/satsignal_mcp/vendor/disclosure_builder/SOURCE_COMMIT

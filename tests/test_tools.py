@@ -453,10 +453,12 @@ class VerifyBundleBlockedTest(unittest.TestCase):
 
 class ToolDefinitionTest(unittest.TestCase):
 
-    def test_seven_tools_declared(self):
+    def test_ten_tools_declared(self):
         # v0.3 split: chain_confirm_bundle is the new canonical name,
         # verify_file_against_bundle is the new full-verify tool, and
         # verify_bundle remains as a deprecated alias.
+        # v0.7 adds the disclosable-* trio (sealed selective disclosure,
+        # node-backed) after the existing seven.
         tools = _tool_definitions()
         self.assertEqual(
             [t.name for t in tools],
@@ -464,7 +466,10 @@ class ToolDefinitionTest(unittest.TestCase):
              "lookup_hash",
              "chain_confirm_bundle",
              "verify_file_against_bundle",
-             "verify_bundle"],
+             "verify_bundle",
+             "anchor_disclosable",
+             "create_disclosure",
+             "verify_disclosure"],
         )
 
     def test_anchor_tools_have_dry_run_with_default_false(self):
