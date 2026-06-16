@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1
+
+Patch. Clearer error when Node is too old for the disclosable-\* tools. No behavior change on Node >= 18. Released 2026-06-16.
+
+- **`anchor_disclosable` / `create_disclosure` / `verify_disclosure` now fail closed with `node_unavailable` on Node < 18**, instead of the opaque `node_bridge_failed` the crypto would otherwise produce mid-op. The vendored entrypoint checks `process.versions.node` before doing any work and returns the same clean, actionable error the missing-Node path already used (the static imports only define functions, so the guard still runs on Node 16/17 and short-circuits before any op).
+
 ## 0.7.0
 
 Adds the **disclosable-\* tools** — sealed selective disclosure for agent provenance. Three new MCP tools (`anchor_disclosable`, `create_disclosure`, `verify_disclosure`) let an agent anchor a payload as a SEALED, per-leaf-committed envelope, later reveal any chosen subset (the rest stays sealed but provably present), and verify a disclosure binds to the committed Merkle root. Tool count 7 → 10. Released 2026-06-16.
