@@ -222,6 +222,25 @@ const _OPS = {
 };
 
 async function main() {
+  // Node-version guard. The sealed-envelope crypto relies on Web Crypto
+  // (subtle HKDF deriveBits / HMAC) + global fetch that are only dependable on
+  // Node >= 18. On older Node the work would otherwise die mid-op with an
+  // opaque node_bridge_failed; instead fail closed with the same clean,
+  // actionable node_unavailable code the missing-Node path uses. The static
+  // imports above only DEFINE functions (no crypto runs at module load), so
+  // this check still runs on Node 16/17 and short-circuits before any op.
+  const _nodeMajor = Number.parseInt(process.versions.node.split(".")[0], 10);
+  if (!Number.isNaN(_nodeMajor) && _nodeMajor < 18) {
+    process.stdout.write(JSON.stringify(fail(
+      "node_unavailable",
+      `Node ${process.versions.node} is too old; the satsignal disclosable-* `
+        + `tools require Node >= 18. Install a newer Node or point `
+        + `SATSIGNAL_NODE at one.`,
+      { error_class: "NodeVersionError" },
+    )));
+    process.exit(1);
+  }
+
   let req;
   try {
     req = JSON.parse(await readStdin());
