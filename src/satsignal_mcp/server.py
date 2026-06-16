@@ -23,7 +23,7 @@ matter_slug / receipt_url) for older / self-hosted servers. If both
 tool returns a validation error (conflicting_alias, mirroring the
 server) rather than silently picking one.
 
-Tools (v0.6):
+Tools (v0.7):
   anchor_file                  sha256 a local file, POST to /api/v1/anchors.
   anchor_text                  sha256 a UTF-8 string.
   anchor_json                  Canonicalize JSON (sort_keys), sha256, anchor.
@@ -41,6 +41,12 @@ Tools (v0.6):
                                (deprecated_tool_blocked) directing the
                                caller to verify_file_against_bundle or
                                chain_confirm_bundle. Removable in 0.5.
+  anchor_disclosable           Anchor a SEALED, selectively-disclosable
+                               envelope (per-leaf commitments). node>=18.
+  create_disclosure            Redact an anchored source .mbnt to reveal a
+                               chosen subset (local-only). node>=18.
+  verify_disclosure            Verify a disclosure binds to its committed
+                               root (cryptographic bind). node>=18.
 
 Dry-run policy: every anchor tool accepts `dry_run: bool = false`. When
 true the tool computes the sha + canonical bytes and returns a preview
@@ -66,6 +72,7 @@ from mcp.server.stdio import stdio_server
 from . import __version__
 from .api import ApiError, SatsignalApi
 from .canonical import CanonicalizationError, canonicalize, sha256_hex
+from .node_bridge import NodeBridgeError, NodeUnavailable, run_disclosure_op
 
 
 _SERVER_NAME = "satsignal"
@@ -82,7 +89,14 @@ _INSTRUCTIONS = (
     "isn't available. lookup_hash is a raw sha → txid index lookup. "
     "Each anchor call broadcasts a real on-chain transaction and "
     "counts against the workspace's daily quota — pass dry_run=true "
-    "first if you want to preview the sha256 before committing."
+    "first if you want to preview the sha256 before committing. "
+    "For SELECTIVE DISCLOSURE: anchor_disclosable seals a payload as "
+    "per-leaf commitments; create_disclosure reveals a chosen subset "
+    "(the rest stays sealed but provably present-but-hidden); "
+    "verify_disclosure checks a disclosure binds to the committed "
+    "root. A disclosure proves the revealed fields are authentic to "
+    "the sealed commitment — not that the content is true. These "
+    "three require node>=18 on PATH (or SATSIGNAL_NODE)."
 )
 
 
@@ -419,6 +433,228 @@ def _tool_definitions() -> list[mtypes.Tool]:
                     "path": {
                         "type": "string",
                         "description": "Path to the .mbnt bundle.",
+                    },
+                },
+            },
+        ),
+        mtypes.Tool(
+            name="anchor_disclosable",
+            description=(
+                "Anchor a payload as a SEALED, selectively-disclosable envelope "
+                "(the golden-wedge scheme). Unlike anchor_text/anchor_json which "
+                "anchor a flat digest, this splits the payload into per-leaf "
+                "commitments under one Merkle root, so ANY subset can later be "
+                "revealed and still verify against the same on-chain commitment. "
+                ".txt -> text-tree-v1; .json -> json-ast-v1 (override via "
+                "`granularity`). Hashing + envelope build happen LOCALLY in a "
+                "vendored Node builder (requires node>=18 on PATH or SATSIGNAL_NODE) "
+                "— only the root is broadcast, the content never leaves this "
+                "machine, and the master salt is never returned. Writes a source "
+                ".mbnt (all leaves, sealed). Pass `reveal`/`reveal_names` to ALSO "
+                "emit a one-shot disclosure in the same call (requires "
+                "storage='mirror'). Proves the anchorer HELD this exact input by a "
+                "specific time (tamper-evidence + timing) — NOT authorship, NOT "
+                "that it pre-existed the anchor. Each live anchor broadcasts one "
+                "on-chain tx and counts against the daily quota; pass dry_run=true "
+                "to preview scheme/leaf_count/root with no spend."
+            ),
+            inputSchema={
+                "type": "object",
+                "required": ["file_path"],
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the .txt or .json file to anchor.",
+                    },
+                    "granularity": {
+                        "type": "string",
+                        "enum": ["tree", "ast"],
+                        "description": (
+                            "Override the extension default (.txt->tree, "
+                            ".json->ast). Required for other extensions."
+                        ),
+                    },
+                    "storage": {
+                        "type": "string",
+                        "enum": ["mirror", "blind"],
+                        "default": "mirror",
+                        "description": (
+                            "mirror (default): the master salt is persisted "
+                            "inside the returned source .mbnt so create_disclosure "
+                            "can redact later from the .mbnt alone. blind: the "
+                            "salt stays local (never uploaded) — higher secrecy, "
+                            "but later redaction needs the salt supplied "
+                            "separately. Content is local in both modes."
+                        ),
+                    },
+                    "reveal": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 0},
+                        "description": (
+                            "Optional. If set, ALSO emit a disclosure revealing "
+                            "only these 0-based leaf indices (everything else "
+                            "sealed). Requires storage='mirror'. Mutually "
+                            "exclusive with reveal_names."
+                        ),
+                    },
+                    "reveal_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Optional. Like reveal but by selector: json-ast-v1 "
+                            "RFC-6901 pointers (e.g. /decision/amount_usd) or "
+                            "text-tree-v1 slash paths (e.g. /p0). Mutually "
+                            "exclusive with reveal."
+                        ),
+                    },
+                    "render_mode": {
+                        "type": "string",
+                        "enum": ["drop", "mask"],
+                        "default": "drop",
+                        "description": (
+                            "For the one-shot disclosure: how redacted nodes "
+                            "render. Presentation-only; the proof is identical."
+                        ),
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Optional category tag on the anchor.",
+                    },
+                    "create_folder": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "POST /api/v1/folders for the folder before "
+                            "anchoring if it does not exist."
+                        ),
+                    },
+                    "out_dir": {
+                        "type": "string",
+                        "description": (
+                            "Output directory for the source .mbnt (and one-shot "
+                            "disclosure). Defaults to the input file's directory."
+                        ),
+                    },
+                    "folder": folder_field,
+                    "matter": matter_field,
+                    "dry_run": dry_run_field,
+                },
+            },
+        ),
+        mtypes.Tool(
+            name="create_disclosure",
+            description=(
+                "Produce an audience-specific redacted disclosure from an "
+                "already-anchored SOURCE .mbnt: reveal only the selectors you "
+                "list, seal everything else. LOCAL ONLY — no network, no on-chain "
+                "tx, no quota (the commitment already exists from "
+                "anchor_disclosable); redact the same source as many times as you "
+                "need for different audiences. Needs the ORIGINAL anchored bytes "
+                "plus the source .mbnt, and runs a vendored Node builder "
+                "(node>=18). Self-verifies that the result still binds to the "
+                "on-chain root before returning. Call with list_only=true first "
+                "to enumerate selectors, then pass the subset to reveal. The "
+                "emitted .disclosure.mbnt is what you hand a counterparty; they "
+                "check it with verify_disclosure."
+            ),
+            inputSchema={
+                "type": "object",
+                "required": ["original_path", "source_mbnt_path"],
+                "properties": {
+                    "original_path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the ORIGINAL file — the exact bytes that "
+                            "were anchored (NOT the source .mbnt)."
+                        ),
+                    },
+                    "source_mbnt_path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the source .mbnt produced by "
+                            "anchor_disclosable."
+                        ),
+                    },
+                    "reveal": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 0},
+                        "description": (
+                            "0-based leaf indices to REVEAL (everything else "
+                            "sealed). Mutually exclusive with reveal_names. "
+                            "Required unless list_only."
+                        ),
+                    },
+                    "reveal_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Selectors to REVEAL: json-ast-v1 RFC-6901 pointers "
+                            "/ text-tree-v1 slash paths (match the 'selector' "
+                            "column from list_only exactly). Mutually exclusive "
+                            "with reveal."
+                        ),
+                    },
+                    "render_mode": {
+                        "type": "string",
+                        "enum": ["drop", "mask"],
+                        "default": "drop",
+                        "description": (
+                            "How redacted nodes render in the view. "
+                            "Presentation-only; the proof is identical either way."
+                        ),
+                    },
+                    "out_dir": {
+                        "type": "string",
+                        "description": (
+                            "Output directory. Defaults to the original file's "
+                            "directory."
+                        ),
+                    },
+                    "list_only": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "If true, enumerate every leaf (index, selector, "
+                            "leaf_id, value preview) and return — writes nothing, "
+                            "reveals nothing. Use to pick reveal values."
+                        ),
+                    },
+                },
+            },
+        ),
+        mtypes.Tool(
+            name="verify_disclosure",
+            description=(
+                "Verify a redacted disclosure .mbnt: confirm every REVEALED leaf "
+                "cryptographically binds to the committed Merkle root claimed by "
+                "the disclosure's linked_anchor, the carrier matches the "
+                "disclosure's claimed canonical hash, profile/algo bind, and (if "
+                "view_path is given) the redacted view's sha256 matches. Returns "
+                "verified=true/false (a failed bind is verified=false, NOT a tool "
+                "error). Proves the revealed fields are authentic to the sealed "
+                "commitment and the sealed fields are provably present-but-hidden "
+                "(not added/removed after anchoring) — it does NOT prove the "
+                "content was true, nor that it pre-existed the anchor. Runs a "
+                "vendored Node builder (node>=18). NOTE: this is the cryptographic "
+                "bind; on-chain existence is reported via linked_txid + root for "
+                "you to confirm on a BSV explorer (sealed anchors are not indexed "
+                "by lookup_hash)."
+            ),
+            inputSchema={
+                "type": "object",
+                "required": ["disclosure_mbnt_path"],
+                "properties": {
+                    "disclosure_mbnt_path": {
+                        "type": "string",
+                        "description": "Path to the .disclosure.mbnt to verify.",
+                    },
+                    "view_path": {
+                        "type": "string",
+                        "description": (
+                            "Optional path to the redacted view file; if given, "
+                            "its sha256 is checked against the disclosure's "
+                            "presentation.view_sha256."
+                        ),
                     },
                 },
             },
@@ -933,6 +1169,356 @@ async def _handle_verify_bundle_blocked(
     )
 
 
+# ─────────────── disclosable-* tools (vendored-node-backed) ─────────────
+# anchor_disclosable / create_disclosure / verify_disclosure delegate the
+# sealed-envelope build, redaction, and disclosure-bind verification to the
+# VENDORED JS source of truth via node_bridge (decision 0023 — one JS
+# implementation of the leaf / RFC-8785 JCS / duplicate-last Merkle / HKDF
+# per-leaf-salt crypto; a Python re-port would risk a one-byte divergence from
+# the on-chain anchor). node>=18 is a host prerequisite the package cannot
+# pip-install; its absence is the fail-closed `node_unavailable` code, never a
+# silent skip. All input validation short-circuits BEFORE any node spawn.
+
+_STORAGE_MODES = ("mirror", "blind")
+_GRANULARITIES = ("tree", "ast")
+
+
+async def _run_node_op(op: str, params: dict, *, api_key: str | None = None
+                       ) -> tuple[dict | None, mtypes.CallToolResult | None]:
+    """Run a node disclosure op off the event loop (mirrors how
+    verify_file_against_bundle threads its blocking verify). Returns
+    (data, None) on success or (None, error_result) on a handled failure,
+    translating NodeUnavailable / NodeBridgeError into the wire vocabulary
+    (carrying the JS fail_code / error_class as extras)."""
+    try:
+        data = await asyncio.to_thread(
+            run_disclosure_op, op, params, api_key=api_key)
+        return data, None
+    except NodeUnavailable as e:
+        return None, _error_response(e.message, code="node_unavailable")
+    except NodeBridgeError as e:
+        extras: dict[str, Any] = {}
+        if e.fail_code:
+            extras["fail_code"] = e.fail_code
+        if e.error_class:
+            extras["error_class"] = e.error_class
+        return None, _error_response(e.message, code=e.code, **extras)
+
+
+def _valid_reveal_indices(reveal: Any) -> bool:
+    # bool is a subclass of int — exclude it explicitly so True/False can't pass.
+    return (isinstance(reveal, list) and len(reveal) > 0
+            and all(isinstance(i, int) and not isinstance(i, bool) and i >= 0
+                    for i in reveal))
+
+
+def _valid_reveal_names(names: Any) -> bool:
+    return (isinstance(names, list) and len(names) > 0
+            and all(isinstance(n, str) for n in names))
+
+
+async def _handle_anchor_disclosable(args: dict, api: SatsignalApi
+                                     ) -> mtypes.CallToolResult:
+    raw_path = args.get("file_path") or ""
+    if not isinstance(raw_path, str) or not raw_path:
+        return _error_response("file_path is required",
+                               code="missing_file_path")
+    path = Path(raw_path).expanduser()
+    if not path.is_file():
+        return _error_response(f"not a file: {path}", code="not_a_file",
+                               which="file_path")
+    try:
+        folder = _resolve_folder(args)
+    except FolderAliasConflict as e:
+        return _error_response(str(e), code="conflicting_alias")
+
+    storage = args.get("storage") or "mirror"
+    if storage not in _STORAGE_MODES:
+        return _error_response(
+            f"storage must be one of {_STORAGE_MODES} (got {storage!r})",
+            code="bad_storage")
+    granularity = args.get("granularity")
+    if granularity is not None and granularity not in _GRANULARITIES:
+        return _error_response(
+            f"granularity must be one of {_GRANULARITIES} (got {granularity!r})",
+            code="bad_granularity")
+    dry_run = bool(args.get("dry_run", False))
+
+    reveal = args.get("reveal")
+    reveal_names = args.get("reveal_names")
+    has_reveal = bool(reveal) or bool(reveal_names)
+    if reveal and reveal_names:
+        return _error_response(
+            "pass either reveal (indices) or reveal_names (selectors), not both",
+            code="conflicting_selectors")
+    if reveal is not None and not _valid_reveal_indices(reveal):
+        return _error_response(
+            "reveal must be a non-empty list of non-negative integers",
+            code="bad_reveal_index")
+    if reveal_names and not _valid_reveal_names(reveal_names):
+        return _error_response(
+            "reveal_names must be a non-empty list of strings",
+            code="bad_reveal_names")
+    if has_reveal and dry_run:
+        return _error_response(
+            "a one-shot disclosure (reveal/reveal_names) needs a real anchor "
+            "and is not available with dry_run",
+            code="reveal_requires_anchor")
+    if has_reveal and storage == "blind":
+        return _error_response(
+            "blind storage omits the master salt from the source .mbnt, so a "
+            "one-shot disclosure cannot be built from it. Use storage='mirror' "
+            "for the one-shot reveal, or anchor blind and run create_disclosure "
+            "later with the salt supplied out-of-band.",
+            code="cannot_redact_blind")
+
+    api_key = None if dry_run else _env_api_key()
+    if not dry_run and not api_key:
+        return _error_response(
+            "SATSIGNAL_API_KEY is required to anchor (not needed for dry_run)",
+            code="missing_api_key")
+
+    params: dict[str, Any] = {
+        "file_path": str(path),
+        "folder_slug": folder,
+        "storage": storage,
+        "dry_run": dry_run,
+        "base": _env_api_base(),
+    }
+    if granularity:
+        params["granularity"] = granularity
+    if args.get("category"):
+        params["category"] = args["category"]
+    if args.get("create_folder"):
+        params["create_folder"] = True
+    if args.get("out_dir"):
+        params["out_dir"] = str(Path(args["out_dir"]).expanduser())
+
+    data, err = await _run_node_op("anchor", params, api_key=api_key)
+    if err:
+        return err
+
+    payload: dict[str, Any] = {
+        "anchored": not dry_run,
+        "scheme": data.get("scheme"),
+        "leaf_count": data.get("leafCount"),
+        "root": data.get("root"),
+        "folder_slug": folder,
+        "storage": storage,
+    }
+    if dry_run:
+        payload["dry_run"] = True
+        if "body" in data:
+            payload["preview_body"] = data["body"]
+        payload["note"] = (
+            "Dry run only: the sealed envelope was built locally; nothing was "
+            "broadcast and no quota was spent. The master salt is never "
+            "returned (salt_b64 is redacted in preview_body).")
+        return _text_response(payload)
+
+    verify = data.get("verify")
+    if isinstance(verify, dict) and verify.get("ok") is False:
+        return _error_response(
+            "anchor self-verify failed: the served .mbnt does not bind to the "
+            "anchored file",
+            code="self_verify_failed", fail_code=verify.get("fail_code"))
+
+    payload.update({
+        "proof_id": data.get("proof_id"),
+        "txid": data.get("txid"),
+        "source_mbnt_path": data.get("sourceMbntPath"),
+        "self_verify": verify,
+    })
+
+    # One-shot disclosure: orchestrated as a separate local `create` op against
+    # the just-written source .mbnt (no key, no network, no extra spend). The
+    # live anchor has ALREADY broadcast and passed self-verify by this point, so
+    # a failure of the (re-runnable, local) disclosure must NOT be surfaced as a
+    # tool error — that would discard proof_id/txid/source_mbnt_path and could
+    # push a caller to re-anchor (a duplicate on-chain spend). Embed the
+    # disclosure outcome instead and keep the anchor result a success.
+    if has_reveal:
+        create_params: dict[str, Any] = {
+            "original_path": str(path),
+            "source_mbnt_path": data.get("sourceMbntPath"),
+        }
+        if reveal:
+            create_params["reveal"] = reveal
+        if reveal_names:
+            create_params["reveal_names"] = reveal_names
+        if args.get("render_mode"):
+            create_params["render_mode"] = args["render_mode"]
+        ddata, derr = await _run_node_op("create", create_params)
+        if derr:
+            derr_body = json.loads(derr.content[0].text)
+            payload["disclosure"] = {
+                "error": derr_body.get("error"),
+                "message": derr_body.get("message"),
+                **({"fail_code": derr_body["fail_code"]}
+                   if "fail_code" in derr_body else {}),
+                "note": ("the on-chain anchor SUCCEEDED; re-run create_disclosure "
+                         "against source_mbnt_path to produce the disclosure "
+                         "locally (no re-anchor needed)"),
+            }
+            return _text_response(payload)
+        dverify = ddata.get("self_verify")
+        disclosure = {
+            "redacted_copy_path": ddata.get("redacted_copy_path"),
+            "disclosure_mbnt_path": ddata.get("disclosure_mbnt_path"),
+            "revealed_count": ddata.get("revealed_count"),
+            "self_verify": dverify,
+        }
+        if isinstance(dverify, dict) and dverify.get("ok") is False:
+            # Defensive: a non-binding one-shot disclosure should be impossible
+            # (the source was just built), but flag it rather than imply success
+            # — without failing the already-sound on-chain anchor.
+            disclosure["error"] = "self_verify_failed"
+            disclosure["message"] = (
+                "one-shot disclosure did not bind to the committed root; the "
+                "on-chain anchor itself is sound")
+        payload["disclosure"] = disclosure
+    return _text_response(payload)
+
+
+async def _handle_create_disclosure(
+    args: dict, api: SatsignalApi,  # api unused — local-only, no network/key
+) -> mtypes.CallToolResult:
+    raw_orig = args.get("original_path") or ""
+    raw_src = args.get("source_mbnt_path") or ""
+    if not isinstance(raw_orig, str) or not raw_orig:
+        return _error_response("original_path is required",
+                               code="missing_original_path")
+    if not isinstance(raw_src, str) or not raw_src:
+        return _error_response("source_mbnt_path is required",
+                               code="missing_source_mbnt_path")
+    orig = Path(raw_orig).expanduser()
+    src = Path(raw_src).expanduser()
+    if not orig.is_file():
+        return _error_response(f"not a file: {orig}", code="not_a_file",
+                               which="original_path")
+    if not src.is_file():
+        return _error_response(f"not a file: {src}", code="not_a_file",
+                               which="source_mbnt_path")
+    if not zipfile.is_zipfile(src):
+        return _error_response(f"{src} is not a .mbnt (ZIP) bundle",
+                               code="not_a_bundle")
+
+    if bool(args.get("list_only", False)):
+        data, err = await _run_node_op("list", {
+            "original_path": str(orig),
+            "source_mbnt_path": str(src),
+        })
+        if err:
+            return err
+        return _text_response({
+            "scheme": data.get("scheme"),
+            "leaf_count": data.get("leaf_count"),
+            "leaves": data.get("leaves"),
+        })
+
+    reveal = args.get("reveal")
+    reveal_names = args.get("reveal_names")
+    if reveal and reveal_names:
+        return _error_response(
+            "pass either reveal (indices) or reveal_names (selectors), not both",
+            code="conflicting_selectors")
+    if not reveal and not reveal_names:
+        return _error_response(
+            "one of reveal, reveal_names, or list_only is required",
+            code="missing_reveal")
+    if reveal is not None and not _valid_reveal_indices(reveal):
+        return _error_response(
+            "reveal must be a non-empty list of non-negative integers",
+            code="bad_reveal_index")
+    if reveal_names and not _valid_reveal_names(reveal_names):
+        return _error_response(
+            "reveal_names must be a non-empty list of strings",
+            code="bad_reveal_names")
+    render_mode = args.get("render_mode") or "drop"
+    if render_mode not in ("drop", "mask"):
+        return _error_response("render_mode must be 'drop' or 'mask'",
+                               code="bad_render_mode")
+
+    params: dict[str, Any] = {
+        "original_path": str(orig),
+        "source_mbnt_path": str(src),
+        "render_mode": render_mode,
+    }
+    if reveal:
+        params["reveal"] = reveal
+    if reveal_names:
+        params["reveal_names"] = reveal_names
+    if args.get("out_dir"):
+        params["out_dir"] = str(Path(args["out_dir"]).expanduser())
+
+    data, err = await _run_node_op("create", params)
+    if err:
+        return err
+    verify = data.get("self_verify")
+    if isinstance(verify, dict) and verify.get("ok") is False:
+        return _error_response(
+            "disclosure self-verify failed: the redacted view does not bind to "
+            "the committed root",
+            code="self_verify_failed", fail_code=verify.get("fail_code"))
+    return _text_response({
+        "redacted_copy_path": data.get("redacted_copy_path"),
+        "disclosure_mbnt_path": data.get("disclosure_mbnt_path"),
+        "root": data.get("root"),
+        "revealed_count": data.get("revealed_count"),
+        "self_verify": verify,
+    })
+
+
+async def _handle_verify_disclosure(
+    args: dict, api: SatsignalApi,  # api unused — read-only, no key
+) -> mtypes.CallToolResult:
+    raw = args.get("disclosure_mbnt_path") or ""
+    if not isinstance(raw, str) or not raw:
+        return _error_response("disclosure_mbnt_path is required",
+                               code="missing_disclosure_path")
+    path = Path(raw).expanduser()
+    if not path.is_file():
+        return _error_response(f"not a file: {path}", code="not_a_file",
+                               which="disclosure_mbnt_path")
+    if not zipfile.is_zipfile(path):
+        return _error_response(f"{path} is not a .mbnt (ZIP) bundle",
+                               code="not_a_bundle")
+    params: dict[str, Any] = {"disclosure_mbnt_path": str(path)}
+    raw_view = args.get("view_path")
+    if isinstance(raw_view, str) and raw_view:
+        view = Path(raw_view).expanduser()
+        if not view.is_file():
+            return _error_response(f"not a file: {view}", code="not_a_file",
+                                   which="view_path")
+        params["view_path"] = str(view)
+
+    data, err = await _run_node_op("verify", params)
+    if err:
+        return err
+    verified = bool(data.get("verified"))
+    payload: dict[str, Any] = {
+        "verified": verified,
+        "scheme": data.get("scheme"),
+        "root": data.get("root"),
+        "linked_txid": data.get("linked_txid"),
+        "carrier_sha256": data.get("carrier_sha256"),
+        "revealed_count": data.get("revealed_count"),
+        "view_checked": data.get("view_checked"),
+        # HONESTY: this is the cryptographic bind only. lookup_hash cannot
+        # confirm sealed/deep-content anchors (no naked file sha is indexed —
+        # the same reason chain_confirm_bundle returns no_file_sha for them), so
+        # on-chain existence is surfaced for external confirmation, not asserted.
+        "chain_confirmation": {
+            "checked_here": False,
+            "how": ("Confirm on-chain by looking up linked_txid on a BSV "
+                    "explorer and checking its OP_RETURN commits to `root`."),
+        },
+    }
+    if not verified:
+        payload["reason"] = data.get("fail_code")
+    return _text_response(payload)
+
+
 _HANDLERS = {
     "anchor_file": _handle_anchor_file,
     "anchor_text": _handle_anchor_text,
@@ -948,6 +1534,11 @@ _HANDLERS = {
     "chain_confirm_bundle": _handle_chain_confirm_bundle,
     "verify_bundle": _handle_verify_bundle_blocked,
     "verify_file_against_bundle": _handle_verify_file_against_bundle,
+    # disclosable-* tools — sealed selective-disclosure, backed by the
+    # vendored JS builder via node_bridge.py (node>=18 host prerequisite).
+    "anchor_disclosable": _handle_anchor_disclosable,
+    "create_disclosure": _handle_create_disclosure,
+    "verify_disclosure": _handle_verify_disclosure,
 }
 
 

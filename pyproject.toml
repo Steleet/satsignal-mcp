@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "satsignal-mcp"
-version = "0.6.0"
+version = "0.7.0"
 description = "MCP server exposing Satsignal tamper-evident anchoring as agent-callable tools."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,3 +36,19 @@ Issues        = "https://github.com/Steleet/satsignal-mcp/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# The disclosable-* tools shell out to a VENDORED snapshot of the JS
+# disclosure-builder (monorepo decision 0023 — one JS source of truth; the
+# build-side leaf/JCS/Merkle crypto is not re-ported to Python). These .mjs +
+# provenance files are package DATA, not importable Python, so they must be
+# declared here to ship inside the sdist and wheel. The build gate greps the
+# built wheel for vendor/disclosure_builder to catch an accidental omission.
+# NOTE: the vendor dir is intentionally FLAT (no nested dirs) so these globs
+# are exhaustive — keep it flat when re-syncing via scripts/sync_vendored_builder.sh.
+[tool.setuptools.package-data]
+satsignal_mcp = [
+    "vendor/disclosure_builder/*.mjs",
+    "vendor/disclosure_builder/*.json",
+    "vendor/disclosure_builder/*.md",
+    "vendor/disclosure_builder/SOURCE_COMMIT",
+]
