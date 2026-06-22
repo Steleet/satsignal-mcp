@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.2
+
+Patch. Corrects the anchor-quota window in the tool/description text: an anchor counts against the workspace's **monthly** quota, not daily. Description-only — no behavior change. Unreleased (pending review).
+
+- **`SERVER_INSTRUCTIONS` and the `anchor_disclosable` tool description now say "monthly quota"** instead of "daily quota". All current tiers (Free/Starter/Pro/Scale) reset monthly and the live API reports `window: "month"`; only retired legacy trial/paid plans reset daily. Surfaced by the Satsignal public-claims accuracy audit (mcp#6).
+
 ## 0.7.1
 
 Patch. Clearer error when Node is too old for the disclosable-\* tools. No behavior change on Node >= 18. Released 2026-06-16.

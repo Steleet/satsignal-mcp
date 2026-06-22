@@ -88,7 +88,7 @@ _INSTRUCTIONS = (
     "chain_confirm_bundle for a fast chain-only check when the file "
     "isn't available. lookup_hash is a raw sha → txid index lookup. "
     "Each anchor call broadcasts a real on-chain transaction and "
-    "counts against the workspace's daily quota — pass dry_run=true "
+    "counts against the workspace's monthly quota — pass dry_run=true "
     "first if you want to preview the sha256 before committing. "
     "For SELECTIVE DISCLOSURE: anchor_disclosable seals a payload as "
     "per-leaf commitments; create_disclosure reveals a chosen subset "
@@ -455,7 +455,7 @@ def _tool_definitions() -> list[mtypes.Tool]:
                 "storage='mirror'). Proves the anchorer HELD this exact input by a "
                 "specific time (tamper-evidence + timing) — NOT authorship, NOT "
                 "that it pre-existed the anchor. Each live anchor broadcasts one "
-                "on-chain tx and counts against the daily quota; pass dry_run=true "
+                "on-chain tx and counts against the monthly quota; pass dry_run=true "
                 "to preview scheme/leaf_count/root with no spend."
             ),
             inputSchema={
